@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fb">
+  <title>LCR Performance Dashboard | Astra Motor</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark">L</div><div><strong>LCR Performance</strong><small>Operations Intelligence</small></div></div>
+      <div class="side-label">WORKSPACE</div>
+      <a class="nav-item active" href="#overview"><span>▦</span> Overview</a>
+      <a class="nav-item" href="#trends"><span>⌁</span> Performance Trends</a>
+      <a class="nav-item" href="#ranking"><span>≡</span> AHASS Ranking</a>
+      <a class="nav-item" href="#priority"><span>◎</span> Priority Actions</a>
+      <div class="sidebar-bottom">
+        <div class="connection-indicator"><span id="connection-dot"></span><div><strong id="connection-label">Connecting…</strong><small id="last-updated">Waiting for first refresh</small></div></div>
+        <p class="side-note">Data refreshes automatically every 15 minutes.</p>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div><p class="eyebrow">OPERATIONS / LCR</p><h1>LCR Performance Dashboard</h1><p class="subtitle">Monitor treatment progress, dealer performance, and actions required.</p></div>
+        <div class="top-actions"><span class="period-pill" id="period-label">October 2026</span><button id="refresh-btn" class="button primary">↻ Refresh data</button></div>
+      </header>
+
+      <div id="alert" class="alert hidden" role="status"></div>
+      <section id="overview" class="section">
+        <div class="section-heading"><div><h2>Executive overview</h2><p>Current position from Ranking Okt 26</p></div><span class="live-label"><i></i> LIVE DATA</span></div>
+        <div class="kpi-grid">
+          <article class="kpi-card"><div class="kpi-top"><span>Total Target</span><span class="kpi-icon blue">◎</span></div><strong id="kpi-target">—</strong><small>Units targeted</small></article>
+          <article class="kpi-card"><div class="kpi-top"><span>Treatment + Replace</span><span class="kpi-icon teal">↗</span></div><strong id="kpi-actual">—</strong><small>Units completed</small></article>
+          <article class="kpi-card"><div class="kpi-top"><span>Achievement</span><span class="kpi-icon purple">%</span></div><strong id="kpi-achievement">—</strong><div class="progress-track"><span id="kpi-progress"></span></div></article>
+          <article class="kpi-card"><div class="kpi-top"><span>Gap to Target</span><span class="kpi-icon orange">△</span></div><strong id="kpi-gap">—</strong><small id="kpi-gap-note">Units remaining</small></article>
+          <article class="kpi-card"><div class="kpi-top"><span>AHASS Below 100%</span><span class="kpi-icon red">!</span></div><strong id="kpi-below">—</strong><small>Outlets below target</small></article>
+        </div>
+      </section>
+
+      <section id="trends" class="section">
+        <div class="section-heading"><div><h2>Performance trends</h2><p>Historical movement and dealer-group comparison</p></div></div>
+        <div class="chart-grid">
+          <article class="panel chart-panel"><div class="panel-heading"><div><h3>Historical LCR performance</h3><p>History LCR source</p></div><span class="chart-tag">History</span></div><div class="chart-wrap"><canvas id="history-chart"></canvas><div id="history-empty" class="empty-chart hidden">History data could not be mapped to a date and value field.</div></div></article>
+          <article class="panel chart-panel"><div class="panel-heading"><div><h3>Dealer group achievement</h3><p>MTD performance by group</p></div></div><div class="chart-wrap"><canvas id="dealer-chart"></canvas><div id="dealer-empty" class="empty-chart hidden">No dealer-group achievement fields were detected.</div></div></article>
+        </div>
+      </section>
+
+      <section id="ranking" class="section">
+        <div class="section-heading"><div><h2>AHASS ranking</h2><p>Search and filter the current ranking</p></div><span id="row-count" class="count-pill">0 outlets</span></div>
+        <div class="panel table-panel">
+          <div class="table-toolbar">
+            <label class="search-box"><span>⌕</span><input id="search-input" type="search" placeholder="Search AHASS, dealer, city…"></label>
+            <select id="dealer-filter" aria-label="Filter dealer group"><option value="">All dealer groups</option></select>
+            <select id="status-filter" aria-label="Filter achievement"><option value="">All achievement levels</option><option value="below">Below 100%</option><option value="ontrack">100% or above</option></select>
+            <button id="export-btn" class="button secondary">Export CSV</button>
+          </div>
+          <div class="table-scroll"><table><thead><tr>
+            <th data-sort="rank">Rank ↕</th><th data-sort="dealer">Grup Dealer ↕</th><th data-sort="code">No. AHASS ↕</th><th data-sort="name">Nama AHASS ↕</th><th data-sort="city">Kota/Kabupaten ↕</th><th class="numeric" data-sort="target">Target ↕</th><th class="numeric" data-sort="actual">Treatment + Replace ↕</th><th data-sort="achievement" class="numeric">Pencapaian ↕</th><th class="numeric" data-sort="gap">Gap ↕</th>
+          </tr></thead><tbody id="ranking-body"><tr><td colspan="9" class="table-message">Loading published sheet data…</td></tr></tbody></table></div>
+          <div class="table-footer"><span id="table-summary">Waiting for data</span><div class="pagination"><button id="prev-page" class="button secondary small">Previous</button><span id="page-label">Page 1</span><button id="next-page" class="button secondary small">Next</button></div></div>
+        </div>
+      </section>
+
+      <section id="priority" class="section">
+        <div class="section-heading"><div><h2>Priority actions</h2><p>Outlets with the largest remaining target gaps</p></div><span class="priority-tag">ACTION REQUIRED</span></div>
+        <div class="panel"><div id="priority-list" class="priority-list"><div class="empty-state">Priority list will appear after data loads.</div></div></div>
+      </section>
+      <footer class="footer"><span>LCR Performance Dashboard</span><span>Source: published Google Sheets · Read-only</span><span id="footer-refresh">Auto-refresh: 15 minutes</span></footer>
+    </main>
+  </div>
+</body>
+</html>
