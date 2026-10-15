@@ -179,3 +179,20 @@ input, select, textarea, button { font-size: 13px; }
 .kpi-value, .kpi-number { color: #000000; }
 .eyebrow { color: #000000; }
 .chart-wrap { color: #000000; }
+
+
+/* Sidebar contrast fix: keep all navigation/status text white on navy. */
+.sidebar .brand strong,
+.sidebar .side-label,
+.sidebar .nav-item,
+.sidebar .nav-item span,
+.sidebar .nav-item:hover,
+.sidebar .nav-item.active,
+.sidebar .nav-item.active span,
+.sidebar .connection-indicator strong,
+.sidebar .connection-indicator small,
+.sidebar .side-note { color: #ffffff !important; }
+.sidebar .brand small { color: #e1eaff !important; }
+.sidebar .side-label { color: #c5d5f4 !important; }
+.sidebar .nav-item:hover,
+.sidebar .nav-item.active { background: #24477f; }
