@@ -108,15 +108,20 @@ function mapRanking(rows) {
   const codeKey = key([/^no ahass$/, /kode ahass/]);
   const nameKey = key([/^nama ahass$/, /nama.*lcr/]);
   const cityKey = key([/^kota kabupaten$/, /kota/, /kabupaten/]);
-  const clearanceKey = key([/^kelolosan lcr dari ue$/, /kelolosan lcr/]);
-  const clearanceRateKey = keys.find(k => /%/.test(k) && /kelolosan/i.test(k)) || key([/kelolosan lcr dari ue/], [/total ue/]);
-  const eligibleKey = key([/total ue esaf masuk ke ahass/, /ue esaf masuk/]);
+  const enteredKey = key([/total ue esaf masuk ke ahass/, /ue esaf masuk/]);
+  const clearanceKey = keys.find(k => normalize(k).includes("kelolosan lcr dari ue") && !String(k).includes("%"));
+  const clearanceRateKey = keys.find(k => normalize(k).includes("kelolosan lcr dari ue") && String(k).includes("%"));
   return rows.map((r, i) => {
     const target = targetKey ? num(r[targetKey]) : 0;
     const actual = actualKey ? num(r[actualKey]) : 0;
     let achievement = achKey ? num(r[achKey]) : (target ? actual / target * 100 : 0);
     if (achKey && String(r[achKey]).includes("%")) achievement = num(r[achKey]);
     else if (achKey && achievement > 0 && achievement <= 1) achievement *= 100;
+    const entered = enteredKey ? num(r[enteredKey]) : 0;
+    const clearance = clearanceKey ? num(r[clearanceKey]) : 0;
+    let clearanceRate = clearanceRateKey ? num(r[clearanceRateKey]) : (entered ? clearance / entered * 100 : 0);
+    if (clearanceRateKey && String(r[clearanceRateKey]).includes("%")) clearanceRate = num(r[clearanceRateKey]);
+    else if (clearanceRateKey && clearanceRate > 0 && clearanceRate <= 1) clearanceRate *= 100;
     const rawRank = rankKey ? num(r[rankKey]) : i + 1;
     return {
       raw:r, rank:rawRank || i+1,
@@ -124,9 +129,7 @@ function mapRanking(rows) {
       code:codeKey ? r[codeKey] : "—",
       name:nameKey ? r[nameKey] : (codeKey ? r[codeKey] : `Outlet ${i+1}`),
       city:cityKey ? r[cityKey] : "—",
-      target, actual, achievement, gap:Math.max(0,target-actual),
-      clearance: clearanceKey ? num(r[clearanceKey]) : 0,
-      clearanceRate: clearanceRateKey ? num(r[clearanceRateKey]) : (eligibleKey && num(r[eligibleKey]) ? (clearanceKey ? num(r[clearanceKey]) : 0) / num(r[eligibleKey]) * 100 : 0)
+      target, actual, achievement, gap:Math.max(0,target-actual), entered, clearance, clearanceRate
     };
   }).filter(x => x.name && !/^nama ahass$/i.test(x.name) && (x.target > 0 || x.actual > 0));
 }
@@ -163,7 +166,7 @@ async function refreshData() {
   } else {
     setConnection("error","Connection failed");
     showAlert("Could not load any Google Sheets source. Confirm each tab is published as CSV and that the URLs are accessible publicly. Details: " + errors.join(" | "));
-    $("ranking-body").innerHTML = `<tr><td colspan="11" class="table-message">Could not load data. Check the published CSV URLs and try Refresh data.</td></tr>`;
+    $("ranking-body").innerHTML = `<tr><td colspan="9" class="table-message">Could not load data. Check the published CSV URLs and try Refresh data.</td></tr>`;
   }
   btn.disabled = false; btn.textContent = "↻ Refresh data";
 }
@@ -212,11 +215,10 @@ function renderKPIs() {
   $("kpi-gap").textContent=fmt(gap);
   $("kpi-gap-note").textContent=gap ? `${pct(totalTarget?totalActual/totalTarget*100:0)} achieved` : "Target reached";
   $("kpi-below").textContent=fmt(rows.filter(r=>r.achievement<100).length);
-  const totalClearance=rows.reduce((s,r)=>s+r.clearance,0);
-  const totalEligible=rows.reduce((s,r)=>s+(r.raw ? firstNumber(r.raw,[/total ue esaf masuk ke ahass/,/ue esaf masuk/]) : 0),0);
-  const rate=totalEligible ? totalClearance/totalEligible*100 : (rows.length ? rows.reduce((s,r)=>s+r.clearanceRate,0)/rows.length : 0);
+  const totalEntered=rows.reduce((sum,r)=>sum+(r.entered||0),0);
+  const totalClearance=rows.reduce((sum,r)=>sum+(r.clearance||0),0);
   $("kpi-clearance").textContent=fmt(totalClearance);
-  $("kpi-clearance-rate").textContent=`Clearance rate: ${pct(rate)}`;
+  $("kpi-clearance-rate").textContent=`Clearance rate: ${totalEntered ? pct(totalClearance/totalEntered*100) : "—"}`;
 }
 function renderTable() {
   const rows=state.filtered||[], pages=Math.max(1,Math.ceil(rows.length/PAGE_SIZE));
@@ -229,7 +231,7 @@ function renderTable() {
   $("ranking-body").innerHTML=visible.length?visible.map((r,i)=>{
     const achClass=r.achievement>=100?"good":r.achievement>=75?"warn":"bad";
     return `<tr><td><span class="rank-number">${escapeHTML(r.rank)}</span></td><td>${escapeHTML(r.dealer)}</td><td>${escapeHTML(r.code)}</td><td><strong>${escapeHTML(r.name)}</strong></td><td>${escapeHTML(r.city)}</td><td class="numeric">${fmt(r.target)}</td><td class="numeric">${fmt(r.actual)}</td><td class="numeric"><div class="achievement-cell"><span class="status-pill ${achClass}">${pct(r.achievement)}</span><span class="achievement-track"><span style="width:${Math.min(100,Math.max(0,r.achievement))}%;background:${r.achievement>=100?'var(--teal)':r.achievement>=75?'var(--orange)':'var(--red)'}"></span></span></div></td><td class="numeric">${fmt(r.gap)}</td><td class="numeric">${fmt(r.clearance)}</td><td class="numeric">${pct(r.clearanceRate)}</td></tr>`;
-  }).join(""):`<tr><td colspan="11" class="table-message">No rows match the current filters, or required columns were not detected.</td></tr>`;
+  }).join(""):`<tr><td colspan="9" class="table-message">No rows match the current filters, or required columns were not detected.</td></tr>`;
 }
 function renderPriority() {
   const rows=(state.outlets||[]).filter(r=>r.gap>0).sort((a,b)=>b.gap-a.gap).slice(0,8);
@@ -369,8 +371,8 @@ function fmt(n){return Number(n||0).toLocaleString("id-ID",{maximumFractionDigit
 function pct(n){return `${Number(n||0).toLocaleString("id-ID",{maximumFractionDigits:1,minimumFractionDigits:1})}%`;}
 function escapeHTML(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function exportCSV(){
-  const rows=state.filtered||[]; const headers=["Rank","Grup Dealer","No AHASS","Nama AHASS","Kota/Kabupaten","Target","Treatment + Replace","Pencapaian (%)","Gap"];
-  const data=[headers,...rows.map(r=>[r.rank,r.dealer,r.code,r.name,r.city,r.target,r.actual,r.achievement.toFixed(1),r.gap])];
+  const rows=state.filtered||[]; const headers=["Rank","Grup Dealer","No AHASS","Nama AHASS","Kota/Kabupaten","Target","Treatment + Replace","Pencapaian (%)","Gap","Kelolosan LCR","% Kelolosan"];
+  const data=[headers,...rows.map(r=>[r.rank,r.dealer,r.code,r.name,r.city,r.target,r.actual,r.achievement.toFixed(1),r.gap,r.clearance,r.clearanceRate.toFixed(1)])];
   const csv=data.map(row=>row.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\r\n");
   const url=URL.createObjectURL(new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"})); const a=document.createElement("a");a.href=url;a.download="lcr-ahass-ranking.csv";a.click();URL.revokeObjectURL(url);
 }
