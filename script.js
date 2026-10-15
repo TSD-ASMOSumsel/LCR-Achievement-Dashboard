@@ -56,8 +56,30 @@ function parseCSV(text, sourceName = "") {
     const score = scoreRow(r);
     if (score > bestScore) { bestScore = score; headerIndex = i; }
   });
-  const headers = rawRows[headerIndex].map((h,i) => String(h || `column_${i+1}`).trim());
-  const result = rawRows.slice(headerIndex + 1).map(r =>
+  // Some published Google Sheets exports split wrapped headers across two rows
+  // (e.g. "Kelolosan" / "LCR dari UE"). Join those fragments before mapping.
+  let headerCells = rawRows[headerIndex].map((h,i) => String(h || `column_${i+1}`).trim());
+  let dataStart = headerIndex + 1;
+  const nextRow = rawRows[headerIndex + 1] || [];
+  const nextNorm = nextRow.map(v => normalize(v));
+  const looksLikeSubheader = sourceName === "ranking" && nextNorm.some(v =>
+    /^(ue esaf masuk ke ahass|esaf masuk ke ahass|lcr dari ue|masuk ke ahass)$/.test(v)
+  ) && !nextRow.some(v => /^\d+$/.test(String(v).trim()));
+  if (looksLikeSubheader) {
+    headerCells = headerCells.map((h,i) => {
+      const fragment = String(nextRow[i] || "").trim();
+      if (!fragment) return h;
+      const hn = normalize(h), fn = normalize(fragment);
+      if (["total","kelolosan","% kelolosan","persen kelolosan","ue esaf","lcr"].includes(hn) ||
+          /^(ue esaf masuk ke ahass|esaf masuk ke ahass|lcr dari ue|masuk ke ahass)$/.test(fn)) {
+        return `${h} ${fragment}`.trim();
+      }
+      return h;
+    });
+    dataStart = headerIndex + 2;
+  }
+  const headers = headerCells.map((h,i) => h || `column_${i+1}`);
+  const result = rawRows.slice(dataStart).map(r =>
     Object.fromEntries(headers.map((h,i) => [h, (r[i] ?? "").trim()]))
   );
   // Drop obvious repeated header lines and weekday-only helper rows.
@@ -111,9 +133,15 @@ function mapRanking(rows) {
   // Published CSV headers can contain line breaks/extra spaces because the
   // source sheet uses wrapped, multi-line labels. Match normalized labels first.
   // Explicit aliases for the source sheet's wrapped/multi-line column labels.
-  const enteredKey = key([/total ue esaf masuk ke ahass/, /total ue esaf masuk/, /ue esaf masuk ke ahass/, /ue esaf masuk/]);
-  const clearanceRateKey = key([/% kelolosan lcr dari ue/, /kelolosan lcr dari ue.*persen/, /persen kelolosan lcr/, /percent.*kelolosan lcr/]);
-  const clearanceKey = key([/^kelolosan lcr dari ue$/, /kelolosan lcr dari ue/], [/% kelolosan/, /persen/, /percent/, /rate/]);
+  const enteredKey = key([/total ue esaf masuk ke ahass/, /total ue esaf masuk/, /ue esaf masuk ke ahass/, /ue esaf masuk/, /^total$/]);
+  const clearanceRateKey = keys.find(k =>
+    (String(k).includes("%") && /kelolosan/.test(normalize(k))) ||
+    (/kelolosan lcr dari ue.*persen|persen kelolosan lcr|percent.*kelolosan lcr|clearance rate/.test(normalize(k)))
+  ) || key([/kelolosan lcr dari ue.*persen/, /persen kelolosan lcr/, /percent.*kelolosan lcr/]);
+  const clearanceKey = keys.find(k =>
+    /kelolosan/.test(normalize(k)) && !String(k).includes("%") &&
+    !/persen|percent|rate/.test(normalize(k))
+  ) || key([/^kelolosan lcr dari ue$/, /kelolosan lcr dari ue/, /^kelolosan$/], [/persen/, /percent/, /rate/]);
   return rows.map((r, i) => {
     const target = targetKey ? num(r[targetKey]) : 0;
     const actual = actualKey ? num(r[actualKey]) : 0;
@@ -127,7 +155,7 @@ function mapRanking(rows) {
     // published values; calculate the rate only when the percentage is absent.
     if (clearanceRateKey && String(r[clearanceRateKey]).includes("%")) clearanceRate = num(r[clearanceRateKey]);
     else if (clearanceRate > 0 && clearanceRate <= 1) clearanceRate *= 100;
-    if (!clearanceRate && entered > 0 && clearance >= 0) clearanceRate = clearance / entered * 100;
+    if (entered > 0 && clearanceKey) clearanceRate = clearance / entered * 100;
     // If a source exports a rate but omits the count, reconstruct the count.
     if (!clearance && entered > 0 && clearanceRate > 0) clearance = Math.round(entered * clearanceRate / 100);
     const rawRank = rankKey ? num(r[rankKey]) : i + 1;
