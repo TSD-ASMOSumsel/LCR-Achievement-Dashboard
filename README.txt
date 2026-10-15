@@ -15,3 +15,6 @@ Important:
 5. To publish: upload index.html, style.css, script.js (and optionally this README) to your GitHub repository root, commit, then enable Settings > Pages > Deploy from a branch > main > /(root).
 
 Dealer-group achievement chart: explicitly maps Grup Dealer, Target, Actual, and Pencapaian; normalizes percentage values to percentage points and falls back to Actual / Target when Pencapaian is blank or contains an Excel error.
+
+
+Kelolosan LCR definition (v3): untreated motorcycles. The dashboard uses the source count where available; if the count is missing/zero while a positive rate exists, it derives a count from eligible UE x rate. Overall rate is calculated from total untreated count divided by total eligible UE. Priority Actions ranks AHASS by untreated count, then untreated rate.
