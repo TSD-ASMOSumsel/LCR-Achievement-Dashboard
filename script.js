@@ -108,6 +108,9 @@ function mapRanking(rows) {
   const codeKey = key([/^no ahass$/, /kode ahass/]);
   const nameKey = key([/^nama ahass$/, /nama.*lcr/]);
   const cityKey = key([/^kota kabupaten$/, /kota/, /kabupaten/]);
+  const clearanceKey = key([/^kelolosan lcr dari ue$/, /kelolosan lcr/]);
+  const clearanceRateKey = keys.find(k => /%/.test(k) && /kelolosan/i.test(k)) || key([/kelolosan lcr dari ue/], [/total ue/]);
+  const eligibleKey = key([/total ue esaf masuk ke ahass/, /ue esaf masuk/]);
   return rows.map((r, i) => {
     const target = targetKey ? num(r[targetKey]) : 0;
     const actual = actualKey ? num(r[actualKey]) : 0;
@@ -121,7 +124,9 @@ function mapRanking(rows) {
       code:codeKey ? r[codeKey] : "—",
       name:nameKey ? r[nameKey] : (codeKey ? r[codeKey] : `Outlet ${i+1}`),
       city:cityKey ? r[cityKey] : "—",
-      target, actual, achievement, gap:Math.max(0,target-actual)
+      target, actual, achievement, gap:Math.max(0,target-actual),
+      clearance: clearanceKey ? num(r[clearanceKey]) : 0,
+      clearanceRate: clearanceRateKey ? num(r[clearanceRateKey]) : (eligibleKey && num(r[eligibleKey]) ? (clearanceKey ? num(r[clearanceKey]) : 0) / num(r[eligibleKey]) * 100 : 0)
     };
   }).filter(x => x.name && !/^nama ahass$/i.test(x.name) && (x.target > 0 || x.actual > 0));
 }
@@ -158,7 +163,7 @@ async function refreshData() {
   } else {
     setConnection("error","Connection failed");
     showAlert("Could not load any Google Sheets source. Confirm each tab is published as CSV and that the URLs are accessible publicly. Details: " + errors.join(" | "));
-    $("ranking-body").innerHTML = `<tr><td colspan="9" class="table-message">Could not load data. Check the published CSV URLs and try Refresh data.</td></tr>`;
+    $("ranking-body").innerHTML = `<tr><td colspan="11" class="table-message">Could not load data. Check the published CSV URLs and try Refresh data.</td></tr>`;
   }
   btn.disabled = false; btn.textContent = "↻ Refresh data";
 }
@@ -207,6 +212,11 @@ function renderKPIs() {
   $("kpi-gap").textContent=fmt(gap);
   $("kpi-gap-note").textContent=gap ? `${pct(totalTarget?totalActual/totalTarget*100:0)} achieved` : "Target reached";
   $("kpi-below").textContent=fmt(rows.filter(r=>r.achievement<100).length);
+  const totalClearance=rows.reduce((s,r)=>s+r.clearance,0);
+  const totalEligible=rows.reduce((s,r)=>s+(r.raw ? firstNumber(r.raw,[/total ue esaf masuk ke ahass/,/ue esaf masuk/]) : 0),0);
+  const rate=totalEligible ? totalClearance/totalEligible*100 : (rows.length ? rows.reduce((s,r)=>s+r.clearanceRate,0)/rows.length : 0);
+  $("kpi-clearance").textContent=fmt(totalClearance);
+  $("kpi-clearance-rate").textContent=`Clearance rate: ${pct(rate)}`;
 }
 function renderTable() {
   const rows=state.filtered||[], pages=Math.max(1,Math.ceil(rows.length/PAGE_SIZE));
@@ -218,8 +228,8 @@ function renderTable() {
   $("prev-page").disabled=state.page<=1; $("next-page").disabled=state.page>=pages;
   $("ranking-body").innerHTML=visible.length?visible.map((r,i)=>{
     const achClass=r.achievement>=100?"good":r.achievement>=75?"warn":"bad";
-    return `<tr><td><span class="rank-number">${escapeHTML(r.rank)}</span></td><td>${escapeHTML(r.dealer)}</td><td>${escapeHTML(r.code)}</td><td><strong>${escapeHTML(r.name)}</strong></td><td>${escapeHTML(r.city)}</td><td class="numeric">${fmt(r.target)}</td><td class="numeric">${fmt(r.actual)}</td><td class="numeric"><div class="achievement-cell"><span class="status-pill ${achClass}">${pct(r.achievement)}</span><span class="achievement-track"><span style="width:${Math.min(100,Math.max(0,r.achievement))}%;background:${r.achievement>=100?'var(--teal)':r.achievement>=75?'var(--orange)':'var(--red)'}"></span></span></div></td><td class="numeric">${fmt(r.gap)}</td></tr>`;
-  }).join(""):`<tr><td colspan="9" class="table-message">No rows match the current filters, or required columns were not detected.</td></tr>`;
+    return `<tr><td><span class="rank-number">${escapeHTML(r.rank)}</span></td><td>${escapeHTML(r.dealer)}</td><td>${escapeHTML(r.code)}</td><td><strong>${escapeHTML(r.name)}</strong></td><td>${escapeHTML(r.city)}</td><td class="numeric">${fmt(r.target)}</td><td class="numeric">${fmt(r.actual)}</td><td class="numeric"><div class="achievement-cell"><span class="status-pill ${achClass}">${pct(r.achievement)}</span><span class="achievement-track"><span style="width:${Math.min(100,Math.max(0,r.achievement))}%;background:${r.achievement>=100?'var(--teal)':r.achievement>=75?'var(--orange)':'var(--red)'}"></span></span></div></td><td class="numeric">${fmt(r.gap)}</td><td class="numeric">${fmt(r.clearance)}</td><td class="numeric">${pct(r.clearanceRate)}</td></tr>`;
+  }).join(""):`<tr><td colspan="11" class="table-message">No rows match the current filters, or required columns were not detected.</td></tr>`;
 }
 function renderPriority() {
   const rows=(state.outlets||[]).filter(r=>r.gap>0).sort((a,b)=>b.gap-a.gap).slice(0,8);
