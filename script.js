@@ -110,26 +110,26 @@ function mapRanking(rows) {
   const cityKey = key([/^kota kabupaten$/, /kota/, /kabupaten/]);
   // Published CSV headers can contain line breaks/extra spaces because the
   // source sheet uses wrapped, multi-line labels. Match normalized labels first.
-  const enteredKey = key([/total ue esaf masuk/, /ue esaf masuk/, /total ue.*ahass/]);
-  const clearanceCandidates = keys.filter(k => normalize(k).includes("kelolosan") && normalize(k).includes("lcr"));
-  const clearanceRateKey = clearanceCandidates.find(k => String(k).includes("%") || /persen|percent|rate/.test(normalize(k))) || null;
-  const clearanceKey = clearanceCandidates.find(k => k !== clearanceRateKey && !String(k).includes("%") && !/persen|percent|rate/.test(normalize(k))) || null;
+  // Explicit aliases for the source sheet's wrapped/multi-line column labels.
+  const enteredKey = key([/total ue esaf masuk ke ahass/, /total ue esaf masuk/, /ue esaf masuk ke ahass/, /ue esaf masuk/]);
+  const clearanceRateKey = key([/% kelolosan lcr dari ue/, /kelolosan lcr dari ue.*persen/, /persen kelolosan lcr/, /percent.*kelolosan lcr/]);
+  const clearanceKey = key([/^kelolosan lcr dari ue$/, /kelolosan lcr dari ue/], [/% kelolosan/, /persen/, /percent/, /rate/]);
   return rows.map((r, i) => {
     const target = targetKey ? num(r[targetKey]) : 0;
     const actual = actualKey ? num(r[actualKey]) : 0;
     let achievement = achKey ? num(r[achKey]) : (target ? actual / target * 100 : 0);
     if (achKey && String(r[achKey]).includes("%")) achievement = num(r[achKey]);
     else if (achKey && achievement > 0 && achievement <= 1) achievement *= 100;
-    let entered = enteredKey ? num(r[enteredKey]) : 0;
+    const entered = enteredKey ? num(r[enteredKey]) : 0;
     let clearance = clearanceKey ? num(r[clearanceKey]) : 0;
-    let clearanceRate = clearanceRateKey ? num(r[clearanceRateKey]) : (entered ? clearance / entered * 100 : 0);
+    let clearanceRate = clearanceRateKey ? num(r[clearanceRateKey]) : 0;
+    // Values in the source sheet are a count and a percentage. Prefer those
+    // published values; calculate the rate only when the percentage is absent.
     if (clearanceRateKey && String(r[clearanceRateKey]).includes("%")) clearanceRate = num(r[clearanceRateKey]);
-    else if (clearanceRateKey && clearanceRate > 0 && clearanceRate <= 1) clearanceRate *= 100;
-    // Fallback for exported sheets where the two-row header causes the count
-    // column to be unnamed/misaligned: derive count from the published rate.
+    else if (clearanceRate > 0 && clearanceRate <= 1) clearanceRate *= 100;
+    if (!clearanceRate && entered > 0 && clearance >= 0) clearanceRate = clearance / entered * 100;
+    // If a source exports a rate but omits the count, reconstruct the count.
     if (!clearance && entered > 0 && clearanceRate > 0) clearance = Math.round(entered * clearanceRate / 100);
-    if (!entered && clearance > 0 && clearanceRate > 0) entered = Math.round(clearance * 100 / clearanceRate);
-    if (!clearanceRate && entered > 0 && clearance > 0) clearanceRate = clearance / entered * 100;
     const rawRank = rankKey ? num(r[rankKey]) : i + 1;
     return {
       raw:r, rank:rawRank || i+1,
@@ -242,9 +242,9 @@ function renderTable() {
   }).join(""):`<tr><td colspan="9" class="table-message">No rows match the current filters, or required columns were not detected.</td></tr>`;
 }
 function renderPriority() {
-  const rows=(state.outlets||[]).filter(r=>Number(r.target)>Number(r.actual) && Number(r.target)>0).sort((a,b)=>(b.target-b.actual)-(a.target-a.actual)).slice(0,8);
+  const rows=(state.outlets||[]).filter(r=>Number.isFinite(Number(r.target)) && Number(r.target)>0 && (Number(r.target)-Number(r.actual))>0).sort((a,b)=>(Number(b.target)-Number(b.actual))-(Number(a.target)-Number(a.actual))).slice(0,8);
   const max=Math.max(1,...rows.map(r=>Math.max(0,r.target-r.actual)));
-  $("priority-list").innerHTML=rows.length?rows.map((r,i)=>{const gap=Math.max(0,r.target-r.actual);return `<div class="priority-row"><div class="priority-rank">${i+1}</div><div class="priority-name"><strong>${escapeHTML(r.name)}</strong><small>${escapeHTML(r.dealer)} · ${escapeHTML(r.city)} · ${escapeHTML(r.code)}</small></div><div class="priority-gap"><small>${fmt(r.actual)} of ${fmt(r.target)} units completed</small><div class="gap-track"><span style="width:${gap/max*100}%"></span></div></div><div class="priority-metric"><strong>${fmt(gap)} units</strong><small>${pct(r.achievement)} achieved</small></div></div>`}).join(""):`<div class="empty-state">No remaining target gaps were found. Check that the Ranking Okt 26 sheet has valid Target and Treatment + Replace columns.</div>`;
+  $("priority-list").innerHTML=rows.length?rows.map((r,i)=>{const gap=Math.max(0,r.target-r.actual);return `<div class="priority-row"><div class="priority-rank">${i+1}</div><div class="priority-name"><strong>${escapeHTML(r.name)}</strong><small>${escapeHTML(r.dealer)} · ${escapeHTML(r.city)} · ${escapeHTML(r.code)}</small></div><div class="priority-gap"><small>${fmt(r.actual)} of ${fmt(r.target)} units completed</small><div class="gap-track"><span style="width:${gap/max*100}%"></span></div></div><div class="priority-metric"><strong>${fmt(gap)} units</strong><small>${pct(r.achievement)} achieved</small></div></div>`}).join(""):`<div class="empty-state">No priority outlets could be calculated. Verify that the Target and Treatment + Replace columns are mapped correctly.</div>`;
 }
 function renderCharts() {
   if (typeof Chart==="undefined") { showAlert("Chart library did not load. Check internet access or the Chart.js CDN."); return; }
