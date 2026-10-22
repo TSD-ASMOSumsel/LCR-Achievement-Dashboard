@@ -8,6 +8,14 @@
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
   <script src="script.js" defer></script>
+  <style>
+    .history-toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:16px 18px 8px; }
+    .history-toolbar label { font-weight:700; color:#19243a; }
+    .history-toolbar select { min-width:260px; max-width:100%; padding:10px 12px; border:1px solid #d7deea; border-radius:8px; background:#fff; color:#19243a; font:inherit; }
+    .history-summary { color:#526078; font-size:13px; font-weight:600; }
+    .ahass-history-wrap { height:360px; padding:12px 18px 20px; position:relative; }
+    @media(max-width:640px) { .ahass-history-wrap { height:300px; padding:8px; } .history-toolbar select { width:100%; min-width:0; } }
+  </style>
 </head>
 <body>
   <div class="app-shell">
@@ -17,7 +25,7 @@
       <a class="nav-item active" href="#overview"><span>▦</span> Overview</a>
       <a class="nav-item" href="#trends"><span>⌁</span> Performance Trends</a>
       <a class="nav-item" href="#ranking"><span>≡</span> AHASS Ranking</a>
-      <a class="nav-item" href="#priority"><span>◎</span> Priority Actions</a>
+      <a class="nav-item" href="#ahass-history"><span>⌁</span> AHASS History</a>
       <div class="sidebar-bottom">
         <div class="connection-indicator"><span id="connection-dot"></span><div><strong id="connection-label">Connecting…</strong><small id="last-updated">Waiting for first refresh</small></div></div>
         <p class="side-note">Data refreshes automatically every 15 minutes.</p>
@@ -66,9 +74,19 @@
         </div>
       </section>
 
-      <section id="priority" class="section">
-        <div class="section-heading"><div><h2>Priority actions</h2><p>Outlets with the largest remaining target gaps</p></div><span class="priority-tag">ACTION REQUIRED</span></div>
-        <div class="panel"><div id="priority-list" class="priority-list"><div class="empty-state">Priority list will appear after data loads.</div></div></div>
+      <section id="ahass-history" class="section">
+        <div class="section-heading"><div><h2>Historical LCR Trends by AHASS</h2><p>Review monthly LCR performance for an individual AHASS</p></div><span class="chart-tag">History LCR</span></div>
+        <div class="panel chart-panel">
+          <div class="table-toolbar history-toolbar">
+            <label for="ahass-history-select">Select AHASS</label>
+            <select id="ahass-history-select" aria-label="Select AHASS for historical trend"><option value="">Loading AHASS list…</option></select>
+            <span id="ahass-history-summary" class="history-summary">Select an AHASS to view its monthly trend.</span>
+          </div>
+          <div class="chart-wrap ahass-history-wrap">
+            <canvas id="ahass-history-chart"></canvas>
+            <div id="ahass-history-empty" class="empty-chart hidden">Historical data could not be mapped to AHASS and monthly columns. Check the headers in the History LCR sheet.</div>
+          </div>
+        </div>
       </section>
       <footer class="footer"><span>LCR Performance Dashboard</span><span>Source: published Google Sheets · Read-only</span><span id="footer-refresh">Auto-refresh: 15 minutes</span></footer>
     </main>

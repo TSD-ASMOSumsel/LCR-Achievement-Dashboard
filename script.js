@@ -165,7 +165,7 @@ async function refreshData() {
     applyFilters();
     renderKPIs();
     renderCharts();
-    renderPriority();
+    renderAhassHistory();
     $("last-updated").textContent = `Updated ${new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})}`;
     $("period-label").textContent = detectPeriod() || "Current period";
     setConnection(errors.length ? "warning" : "ok", errors.length ? "Partially connected" : "All sources connected");
@@ -237,43 +237,118 @@ function renderTable() {
     return `<tr><td><span class="rank-number">${escapeHTML(r.rank)}</span></td><td>${escapeHTML(r.dealer)}</td><td>${escapeHTML(r.code)}</td><td><strong>${escapeHTML(r.name)}</strong></td><td>${escapeHTML(r.city)}</td><td class="numeric">${fmt(r.target)}</td><td class="numeric">${fmt(r.actual)}</td><td class="numeric"><div class="achievement-cell"><span class="status-pill ${achClass}">${pct(r.achievement)}</span><span class="achievement-track"><span style="width:${Math.min(100,Math.max(0,r.achievement))}%;background:${r.achievement>=100?'var(--teal)':r.achievement>=75?'var(--orange)':'var(--red)'}"></span></span></div></td><td class="numeric">${fmt(r.gap)}</td></tr>`;
   }).join(""):`<tr><td colspan="9" class="table-message">No rows match the current filters, or required columns were not detected.</td></tr>`;
 }
-function renderPriority() {
-  const rows=(state.outlets||[]).filter(r=>Number.isFinite(Number(r.target)) && Number(r.target)>0 && (Number(r.target)-Number(r.actual))>0).sort((a,b)=>(Number(b.target)-Number(b.actual))-(Number(a.target)-Number(a.actual))).slice(0,8);
-  const max=Math.max(1,...rows.map(r=>Math.max(0,r.target-r.actual)));
-  $("priority-list").innerHTML=rows.length?rows.map((r,i)=>{const gap=Math.max(0,r.target-r.actual);return `<div class="priority-row"><div class="priority-rank">${i+1}</div><div class="priority-name"><strong>${escapeHTML(r.name)}</strong><small>${escapeHTML(r.dealer)} · ${escapeHTML(r.city)} · ${escapeHTML(r.code)}</small></div><div class="priority-gap"><small>${fmt(r.actual)} of ${fmt(r.target)} units completed</small><div class="gap-track"><span style="width:${gap/max*100}%"></span></div></div><div class="priority-metric"><strong>${fmt(gap)} units</strong><small>${pct(r.achievement)} achieved</small></div></div>`}).join(""):`<div class="empty-state">No priority outlets could be calculated. Verify that the Target and Treatment + Replace columns are mapped correctly.</div>`;
-}
 function renderCharts() {
   if (typeof Chart==="undefined") { showAlert("Chart library did not load. Check internet access or the Chart.js CDN."); return; }
   renderHistoryChart(); renderDealerChart();
 }
+function getHistoryConfig() {
+  const rows = state.history || [];
+  const keys = Object.keys(rows[0] || {});
+  const monthPattern = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[ -]?(26|2026)$/i;
+  const monthNames = {jan:"Jan",feb:"Feb",mar:"Mar",apr:"Apr",may:"May",jun:"Jun",jul:"Jul",aug:"Aug",sep:"Sep",oct:"Oct",nov:"Nov",dec:"Dec"};
+  const monthKeys = keys.filter(k => monthPattern.test(normalize(k).replace(/\s+/g," ")));
+  const orderedMonths = ["Jan-26","Feb-26","Mar-26","Apr-26","May-26","Jun-26","Jul-26","Aug-26","Sep-26","Oct-26","Nov-26","Dec-26"];
+  const months = monthKeys.map(key => {
+    const m = normalize(key).replace(/\s+/g," ").match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[ -]?(26|2026)$/i);
+    return { key, label: m ? `${monthNames[m[1].toLowerCase()]}-26` : key };
+  }).sort((a,b) => orderedMonths.indexOf(a.label) - orderedMonths.indexOf(b.label));
+  const codeKey = keys.find(k => /^(no ahass|kode ahass|kode outlet|ahass code)$/.test(normalize(k)));
+  const nameKey = keys.find(k => /^(nama ahass|nama outlet|ahass|nama dealer)$/.test(normalize(k)))
+    || keys.find(k => /nama.*ahass|ahass.*nama/.test(normalize(k)));
+  const dealerKey = keys.find(k => /^(grup dealer|group dealer|dealer)$/.test(normalize(k)));
+  const identityKey = codeKey || nameKey;
+  return { rows, keys, months, codeKey, nameKey, dealerKey, identityKey };
+}
+function historyRowLabel(row, cfg, i) {
+  const code = cfg.codeKey ? String(row[cfg.codeKey] || "").trim() : "";
+  const name = cfg.nameKey ? String(row[cfg.nameKey] || "").trim() : "";
+  const dealer = cfg.dealerKey ? String(row[cfg.dealerKey] || "").trim() : "";
+  const primary = name || code || (cfg.identityKey ? String(row[cfg.identityKey] || "").trim() : "");
+  if (!primary) return "";
+  return `${primary}${code && name && code !== name ? ` (${code})` : ""}${dealer ? ` — ${dealer}` : ""}`;
+}
 function renderHistoryChart() {
-  const rows=state.history||[];
-  const canvas=$("history-chart"), empty=$("history-empty");
-  if(!rows.length){canvas.classList.add("hidden");empty.classList.remove("hidden");return;}
+  const cfg = getHistoryConfig();
+  const canvas = $("history-chart"), empty = $("history-empty");
+  if (!cfg.rows.length || !cfg.months.length) {
+    canvas.classList.add("hidden"); empty.classList.remove("hidden"); return;
+  }
+  const labels = cfg.months.map(m => m.label);
+  const values = cfg.months.map(m => cfg.rows.reduce((sum,r) => sum + num(r[m.key]), 0));
+  canvas.classList.remove("hidden"); empty.classList.add("hidden");
+  makeChart("history", {type:"line", data:{labels, datasets:[{
+    label:"Total LCR treatment", data:values, borderColor:"#1748e8",
+    backgroundColor:"rgba(23,72,232,.18)", fill:true, tension:.3,
+    pointRadius:4, pointHoverRadius:6, pointBackgroundColor:"#ffffff",
+    pointBorderColor:"#1748e8", pointBorderWidth:2, borderWidth:3
+  }]}, options:chartOptions()});
+}
+function renderAhassHistory() {
+  const cfg = getHistoryConfig();
+  const select = $("ahass-history-select");
+  const canvas = $("ahass-history-chart");
+  const empty = $("ahass-history-empty");
+  const summary = $("ahass-history-summary");
+  if (!select || !canvas || !empty || !summary) return;
 
-  // History LCR is a wide table: one row per AHASS and one column per month.
-  // Aggregate the monthly actuals across AHASS instead of looking for a date column.
-  const keys=Object.keys(rows[0]||{});
-  const monthPattern=/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[ -]?(26|2026)$/i;
-  const monthKeys=keys.filter(k=>monthPattern.test(normalize(k).replace(/\s+/g," ")));
-  const orderedMonths=["Jan-26","Feb-26","Mar-26","Apr-26","May-26","Jun-26","Jul-26","Aug-26","Sep-26","Oct-26","Nov-26","Dec-26"];
-  const normalizeMonth = k => {
-    const n=normalize(k).replace(/\s+/g," ");
-    const m=n.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[ -]?(26|2026)$/i);
-    if(!m) return k;
-    const names={jan:"Jan",feb:"Feb",mar:"Mar",apr:"Apr",may:"May",jun:"Jun",jul:"Jul",aug:"Aug",sep:"Sep",oct:"Oct",nov:"Nov",dec:"Dec"};
-    return names[m[1].toLowerCase()]+"-26";
-  };
-  const actualMonths=monthKeys.map(k=>({key:k,label:normalizeMonth(k)}))
-    .sort((a,b)=>orderedMonths.indexOf(a.label)-orderedMonths.indexOf(b.label));
-  if(!actualMonths.length){canvas.classList.add("hidden");empty.classList.remove("hidden");return;}
-  const labels=actualMonths.map(m=>m.label);
-  const values=actualMonths.map(m=>rows.reduce((sum,r)=>sum+num(r[m.key]),0));
-  canvas.classList.remove("hidden");empty.classList.add("hidden");
-  makeChart("history",{type:"line",data:{labels,datasets:[{
-    label:"Total LCR treatment",data:values,borderColor:"#1748e8",
-    backgroundColor:"rgba(23,72,232,.18)",fill:true,tension:.3,pointRadius:4,pointHoverRadius:6,pointBackgroundColor:"#ffffff",pointBorderColor:"#1748e8",pointBorderWidth:2,borderWidth:3
-  }]},options:chartOptions()});
+  const valid = cfg.rows.map((row, i) => ({
+    row, i, label: historyRowLabel(row, cfg, i)
+  })).filter(x => x.label && cfg.months.some(m => String(x.row[m.key] ?? "").trim() !== ""));
+  if (!cfg.months.length || !valid.length) {
+    select.innerHTML = '<option value="">AHASS history unavailable</option>';
+    canvas.classList.add("hidden");
+    empty.classList.remove("hidden");
+    summary.textContent = "No AHASS/monthly history fields were detected.";
+    return;
+  }
+
+  const current = select.value;
+  select.innerHTML = valid.map((x, i) =>
+    `<option value="${i}">${escapeHTML(x.label)}</option>`
+  ).join("");
+  const selectedIndex = valid.findIndex((x, i) => String(i) === current);
+  select.value = String(selectedIndex >= 0 ? selectedIndex : 0);
+  const chosen = valid[Number(select.value)];
+  const labels = cfg.months.map(m => m.label);
+  const values = cfg.months.map(m => {
+    const raw = String(chosen.row[m.key] ?? "").trim();
+    return raw === "" || /^[-–—]$/.test(raw) ? null : num(raw);
+  });
+  const validValues = values.filter(v => v !== null && Number.isFinite(v));
+  const latestIndex = values.reduce((last, v, i) => v !== null && Number.isFinite(v) ? i : last, -1);
+  const previousIndex = latestIndex > 0 ? values.slice(0, latestIndex).reduce((last, v, i) => v !== null && Number.isFinite(v) ? i : last, -1) : -1;
+  if (latestIndex >= 0) {
+    const latest = values[latestIndex];
+    const previous = previousIndex >= 0 ? values[previousIndex] : null;
+    const change = previous !== null ? latest - previous : null;
+    summary.textContent = `${labels[latestIndex]}: ${fmt(latest)} units${change !== null ? ` · ${change > 0 ? "+" : ""}${fmt(change)} vs ${labels[previousIndex]}` : ""}`;
+  } else {
+    summary.textContent = "No monthly values available for this AHASS.";
+  }
+  if (typeof Chart === "undefined") return;
+  canvas.classList.remove("hidden"); empty.classList.add("hidden");
+  makeChart("ahassHistory", {
+    type:"line",
+    data:{labels, datasets:[{
+      label:"LCR treatment units", data:values,
+      borderColor:"#1748e8", backgroundColor:"rgba(23,72,232,.12)",
+      fill:true, tension:.25, spanGaps:false, pointRadius:4,
+      pointHoverRadius:6, pointBackgroundColor:"#ffffff",
+      pointBorderColor:"#1748e8", pointBorderWidth:2, borderWidth:3
+    }]},
+    options:{
+      ...chartOptions(),
+      plugins:{
+        ...chartOptions().plugins,
+        legend:{display:true, labels:{boxWidth:9,usePointStyle:true,pointStyle:"circle",font:{family:"DM Sans",size:12,weight:"700"},color:"#000000"}},
+        tooltip:{backgroundColor:"#19243a",padding:10,callbacks:{label:ctx=>`LCR treatment: ${ctx.raw === null ? "No data" : fmt(ctx.raw) + " units"}`}}
+      },
+      scales:{
+        x:{...chartOptions().scales.x, ticks:{...chartOptions().scales.x.ticks, maxRotation:45}},
+        y:{...chartOptions().scales.y, beginAtZero:true, title:{display:true,text:"LCR treatment (units)",color:"#19243a",font:{weight:"700"}}}
+      }
+    }
+  });
 }
 function renderDealerChart() {
   const rows = state.dealer || [];
@@ -370,7 +445,11 @@ function renderDealerChart() {
 }
 
 function chartOptions(){return {responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,labels:{boxWidth:9,usePointStyle:true,pointStyle:"circle",font:{family:"DM Sans",size:12,weight:"700"},color:"#000000"}},tooltip:{backgroundColor:"#19243a",padding:10,displayColors:true}},scales:{x:{grid:{display:false},ticks:{color:"#000000",font:{family:"DM Sans",size:12,weight:"700"},maxRotation:45}},y:{beginAtZero:true,grid:{color:"rgba(92,113,148,.20)"},ticks:{color:"#000000",font:{family:"DM Sans",size:13,weight:"700"}}}}};}
-function makeChart(key,config){if(state.charts[key])state.charts[key].destroy();state.charts[key]=new Chart($(key==="history"?"history-chart":"dealer-chart"),config);}
+function makeChart(key,config){
+  if(state.charts[key]) state.charts[key].destroy();
+  const canvasId = key==="history" ? "history-chart" : key==="ahassHistory" ? "ahass-history-chart" : "dealer-chart";
+  state.charts[key]=new Chart($(canvasId),config);
+}
 function fmt(n){return Number(n||0).toLocaleString("id-ID",{maximumFractionDigits:1});}
 function pct(n){return `${Number(n||0).toLocaleString("id-ID",{maximumFractionDigits:1,minimumFractionDigits:1})}%`;}
 function escapeHTML(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
@@ -381,6 +460,7 @@ function exportCSV(){
   const url=URL.createObjectURL(new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"})); const a=document.createElement("a");a.href=url;a.download="lcr-ahass-ranking.csv";a.click();URL.revokeObjectURL(url);
 }
 $("refresh-btn").addEventListener("click",refreshData);
+$("ahass-history-select").addEventListener("change",renderAhassHistory);
 $("search-input").addEventListener("input",applyFilters);
 $("dealer-filter").addEventListener("change",applyFilters);
 $("status-filter").addEventListener("change",applyFilters);
