@@ -314,14 +314,19 @@ function renderAhassHistory() {
 
   const filtered = valid.filter(x => !groupSelect.value || x.group === groupSelect.value);
   const previousAhass = select.value;
-  select.innerHTML = filtered.map((x, i) =>
-    `<option value="${i}">${escapeHTML(x.label)}</option>`
-  ).join("");
-  const selectedIndex = filtered.findIndex((x, i) => String(i) === previousAhass);
-  select.value = String(selectedIndex >= 0 ? selectedIndex : 0);
-  const chosen = filtered[Number(select.value)];
+  const groupChosen = Boolean(groupSelect.value);
+  select.innerHTML =
+    (groupChosen ? '<option value="__group_total__">Combined total — selected group</option>' : '') +
+    filtered.map((x, i) => `<option value="${i}">${escapeHTML(x.label)}</option>`).join("");
 
-  if (!chosen) {
+  // When a group is selected, default to the combined monthly total for all AHASS in that group.
+  const desired = groupChosen ? "__group_total__" : previousAhass;
+  if ([...select.options].some(o => o.value === desired)) select.value = desired;
+  else select.value = groupChosen ? "__group_total__" : "0";
+
+  const isGroupTotal = groupChosen && select.value === "__group_total__";
+  const chosen = isGroupTotal ? null : filtered[Number(select.value)];
+  if (!isGroupTotal && !chosen) {
     canvas.classList.add("hidden");
     empty.classList.remove("hidden");
     summary.textContent = "No AHASS available for this dealer group.";
@@ -330,17 +335,25 @@ function renderAhassHistory() {
 
   const labels = cfg.months.map(m => m.label);
   const values = cfg.months.map(m => {
-    const raw = String(chosen.row[m.key] ?? "").trim();
-    return raw === "" || /^[-–—]$/.test(raw) ? null : num(raw);
+    const selectedRows = isGroupTotal ? filtered : [chosen];
+    const cellValues = selectedRows.map(x => {
+      const raw = String(x.row[m.key] ?? "").trim();
+      return raw === "" || /^[-–—]$/.test(raw) ? null : num(raw);
+    }).filter(v => v !== null && Number.isFinite(v));
+    return cellValues.length ? cellValues.reduce((sum, v) => sum + v, 0) : null;
   });
+  const chartLabel = isGroupTotal
+    ? `Combined LCR treatment units — ${groupSelect.options[groupSelect.selectedIndex].text}`
+    : `LCR treatment units — ${chosen.label}`;
+
   const latestIndex = values.reduce((last, v, i) => v !== null && Number.isFinite(v) ? i : last, -1);
   const previousIndex = latestIndex > 0 ? values.slice(0, latestIndex).reduce((last, v, i) => v !== null && Number.isFinite(v) ? i : last, -1) : -1;
   if (latestIndex >= 0) {
     const latest = values[latestIndex];
     const previous = previousIndex >= 0 ? values[previousIndex] : null;
     const change = previous !== null ? latest - previous : null;
-    summary.textContent = `${labels[latestIndex]}: ${fmt(latest)} units${change !== null ? ` · ${change > 0 ? "+" : ""}${fmt(change)} vs ${labels[previousIndex]}` : ""}`;
-  } else summary.textContent = "No monthly values available for this AHASS.";
+    summary.textContent = `${labels[latestIndex]}: ${fmt(latest)} units${change !== null ? ` · ${change > 0 ? "+" : ""}${fmt(change)} vs ${labels[previousIndex]}` : ""}${isGroupTotal ? ` · ${filtered.length} AHASS combined` : ""}`;
+  } else summary.textContent = "No monthly values available for this selection.";
 
   if (typeof Chart === "undefined") return;
   canvas.classList.remove("hidden");
@@ -348,7 +361,7 @@ function renderAhassHistory() {
   makeChart("ahassHistory", {
     type:"line",
     data:{labels, datasets:[{
-      label:`LCR treatment units — ${chosen.label}`, data:values,
+      label:chartLabel, data:values,
       borderColor:"#1748e8", backgroundColor:"rgba(23,72,232,.12)",
       fill:true, tension:.25, spanGaps:false, pointRadius:4,
       pointHoverRadius:6, pointBackgroundColor:"#ffffff",
