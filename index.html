@@ -7,6 +7,7 @@
   <title>LCR Performance Dashboard | Astra Motor</title>
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" defer></script>
   <script src="script.js" defer></script>
   <style>
     .history-toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:16px 18px 8px; }
@@ -65,7 +66,7 @@
             <label class="search-box"><span>⌕</span><input id="search-input" type="search" placeholder="Search AHASS, dealer, city…"></label>
             <select id="dealer-filter" aria-label="Filter dealer group"><option value="">All dealer groups</option></select>
             <select id="status-filter" aria-label="Filter achievement"><option value="">All achievement levels</option><option value="below">Below 100%</option><option value="ontrack">100% or above</option></select>
-            <button id="export-btn" class="button secondary">Export CSV</button>
+            <button id="export-btn" class="button secondary">Export JPG</button>
           </div>
           <div class="table-scroll"><table><thead><tr>
             <th data-sort="rank">Rank ↕</th><th data-sort="dealer">Grup Dealer ↕</th><th data-sort="code">No. AHASS ↕</th><th data-sort="name">Nama AHASS ↕</th><th data-sort="city">Kota/Kabupaten ↕</th><th class="numeric" data-sort="target">Target ↕</th><th class="numeric" data-sort="actual">Treatment + Replace ↕</th><th data-sort="achievement" class="numeric">Pencapaian ↕</th><th class="numeric" data-sort="gap">Gap ↕</th>

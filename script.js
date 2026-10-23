@@ -453,11 +453,46 @@ function makeChart(key,config){
 function fmt(n){return Number(n||0).toLocaleString("id-ID",{maximumFractionDigits:1});}
 function pct(n){return `${Number(n||0).toLocaleString("id-ID",{maximumFractionDigits:1,minimumFractionDigits:1})}%`;}
 function escapeHTML(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
-function exportCSV(){
-  const rows=state.filtered||[]; const headers=["Rank","Grup Dealer","No AHASS","Nama AHASS","Kota/Kabupaten","Target","Treatment + Replace","Pencapaian (%)","Gap"];
-  const data=[headers,...rows.map(r=>[r.rank,r.dealer,r.code,r.name,r.city,r.target,r.actual,r.achievement.toFixed(1),r.gap])];
-  const csv=data.map(row=>row.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\r\n");
-  const url=URL.createObjectURL(new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"})); const a=document.createElement("a");a.href=url;a.download="lcr-ahass-ranking.csv";a.click();URL.revokeObjectURL(url);
+async function exportJPG(){
+  const button = $("export-btn");
+  const panel = document.querySelector("#ranking .table-panel");
+  if (!panel) return;
+  if (typeof html2canvas !== "function") {
+    showAlert("JPG export library did not load. Check internet access and try again.");
+    return;
+  }
+  const oldText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Preparing JPG…";
+  try {
+    const canvas = await html2canvas(panel, {
+      backgroundColor: "#ffffff",
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      onclone: clonedDoc => {
+        const clonedPanel = clonedDoc.querySelector("#ranking .table-panel");
+        const scroll = clonedPanel?.querySelector(".table-scroll");
+        if (scroll) {
+          scroll.style.overflow = "visible";
+          scroll.style.maxWidth = "none";
+          scroll.style.width = `${scroll.scrollWidth}px`;
+        }
+        const table = clonedPanel?.querySelector("table");
+        if (table) table.style.width = "max-content";
+      }
+    });
+    const link = document.createElement("a");
+    link.download = `lcr-ahass-ranking-${new Date().toISOString().slice(0,10)}.jpg`;
+    link.href = canvas.toDataURL("image/jpeg", 0.95);
+    link.click();
+  } catch (error) {
+    console.error("JPG export failed:", error);
+    showAlert("Could not export the ranking as JPG. Please refresh the dashboard and try again.");
+  } finally {
+    button.disabled = false;
+    button.textContent = oldText;
+  }
 }
 $("refresh-btn").addEventListener("click",refreshData);
 $("ahass-history-select").addEventListener("change",renderAhassHistory);
@@ -466,7 +501,7 @@ $("dealer-filter").addEventListener("change",applyFilters);
 $("status-filter").addEventListener("change",applyFilters);
 $("prev-page").addEventListener("click",()=>{if(state.page>1){state.page--;renderTable();}});
 $("next-page").addEventListener("click",()=>{state.page++;renderTable();});
-$("export-btn").addEventListener("click",exportCSV);
+$("export-btn").addEventListener("click",exportJPG);
 document.querySelectorAll("th[data-sort]").forEach(th=>th.addEventListener("click",()=>{
   const key=th.dataset.sort; if(state.sort===key)state.direction=state.direction==="asc"?"desc":"asc";else{state.sort=key;state.direction=key==="rank"?"asc":"desc";}
   applyFilters();
