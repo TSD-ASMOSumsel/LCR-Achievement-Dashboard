@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" defer></script>
-  <script src="script.js?v=jpg-export-20261023" defer></script>
+  <script src="script.js?v=history-group-jpg-labels-20261023" defer></script>
   <style>
     .history-toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:16px 18px 8px; }
     .history-toolbar label { font-weight:700; color:#19243a; }
@@ -79,9 +79,12 @@
         <div class="section-heading"><div><h2>Historical LCR Trends by AHASS</h2><p>Review monthly LCR performance for an individual AHASS</p></div><span class="chart-tag">History LCR</span></div>
         <div class="panel chart-panel">
           <div class="table-toolbar history-toolbar">
+            <label for="history-group-filter">Dealer group</label>
+            <select id="history-group-filter" aria-label="Filter historical trend by dealer group"><option value="">All dealer groups</option></select>
             <label for="ahass-history-select">Select AHASS</label>
             <select id="ahass-history-select" aria-label="Select AHASS for historical trend"><option value="">Loading AHASS list…</option></select>
             <span id="ahass-history-summary" class="history-summary">Select an AHASS to view its monthly trend.</span>
+            <button id="export-history-jpg-btn" class="button secondary" type="button">Export Trend JPG</button>
           </div>
           <div class="chart-wrap ahass-history-wrap">
             <canvas id="ahass-history-chart"></canvas>
