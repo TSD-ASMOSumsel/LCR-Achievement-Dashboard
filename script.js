@@ -156,13 +156,13 @@ async function refreshData() {
   const btn = $("refresh-btn"); btn.disabled = true; btn.textContent = "↻ Refreshing…";
   setConnection("loading", "Refreshing data…");
   const rankingUrl = SOURCES.rankingByPeriod[state.period] || SOURCES.rankingByPeriod["2026-11"];
-  const results = await Promise.allSettled([fetchCSV(rankingUrl, 'ranking'), fetchCSV(SOURCES.dealer, 'dealer'), fetchCSV(SOURCES.history, 'history')]);
-  const names = ["ranking","dealer","history"], errors=[];
+  const results = await Promise.allSettled([fetchCSV(rankingUrl, 'ranking'), fetchCSV(SOURCES.history, 'history')]);
+  const names = ["ranking","history"], errors=[];
   results.forEach((result,i) => {
     if (result.status === "fulfilled") state[names[i]] = result.value;
     else errors.push(`${names[i]}: ${result.reason?.message || "fetch failed"}`);
   });
-  const anyData = state.ranking.length || state.dealer.length || state.history.length;
+  const anyData = state.ranking.length || state.history.length;
   if (anyData) {
     state.outlets = mapRanking(state.ranking);
     populateDealerFilter();
@@ -195,7 +195,7 @@ function setConnection(status,label) {
 function showAlert(msg) { $("alert").textContent=msg; $("alert").classList.remove("hidden"); }
 function hideAlert() { $("alert").classList.add("hidden"); }
 function detectPeriod() {
-  const all = [...state.ranking,...state.dealer,...state.history];
+  const all = [...state.ranking,...state.history];
   const key = findKey(all,[/periode/,/period/,/bulan/,/month/]);
   if (key) { const v=all.map(r=>r[key]).find(Boolean); if(v) return v; }
   return "";
@@ -403,47 +403,31 @@ function renderAhassHistory() {
 }
 
 function renderDealerChart() {
-  const rows = state.dealer || [];
+  // Calculate group ACV from the currently selected month's AHASS ranking.
+  // Group achievement is weighted: SUM(actual) / SUM(target), not an average
+  // of each AHASS percentage.
+  const rows = state.outlets || [];
   const canvas = $("dealer-chart"), empty = $("dealer-empty");
   if (!rows.length) { canvas.classList.add("hidden"); empty.classList.remove("hidden"); return; }
 
-  const keys = Object.keys(rows[0] || {});
-  const findExact = (name) => keys.find(k => normalize(k) === normalize(name));
-  const groupKey = findExact("Grup Dealer") || findExact("Group Dealer");
-  const targetKey = findExact("Target");
-  const actualKey = findExact("Actual");
-  const achievementKey = findExact("Pencapaian");
-  const labelKey = groupKey || keys.find(k => /grup dealer|group dealer/i.test(k));
+  const groups = new Map();
+  rows.forEach(r => {
+    const label = String(r.dealer || "").trim();
+    if (!label || label === "—") return;
+    if (!groups.has(label)) groups.set(label, { label, target: 0, actual: 0, outlets: 0 });
+    const group = groups.get(label);
+    group.target += Number(r.target) || 0;
+    group.actual += Number(r.actual) || 0;
+    group.outlets += 1;
+  });
 
-  const points = rows.map((r, i) => {
-    const target = targetKey ? num(r[targetKey]) : 0;
-    const actual = actualKey ? num(r[actualKey]) : 0;
-    let achievement = achievementKey ? num(r[achievementKey]) : NaN;
-    const raw = achievementKey ? String(r[achievementKey] ?? "").trim() : "";
-    if (!Number.isFinite(achievement) || raw === "" || /#REF!|#DIV\/0!/i.test(raw)) {
-      achievement = target > 0 ? actual / target * 100 : 0;
-    } else if (raw.includes("%")) {
-      // num() strips the percent symbol, so 43.1% remains 43.1.
-    } else if (achievement > 0 && achievement <= 1) {
-      // Google Sheets may export percentage-formatted cells as fractions.
-      achievement *= 100;
-    }
-    return {
-      label: labelKey ? String(r[labelKey] || "").trim() : `Group ${i + 1}`,
-      achievement: Number.isFinite(achievement) ? achievement : 0,
-      target, actual
-    };
-  }).filter(x => x.label && !/^grup dealer$/i.test(x.label));
+  const points = [...groups.values()].map(g => ({
+    ...g, achievement: g.target > 0 ? g.actual / g.target * 100 : 0
+  })).filter(g => g.target > 0).sort((a,b) => b.achievement - a.achievement);
 
-  // Keep every group from the published MTD table, including TDM.
-  // Some exported sheets contain repeated rank values, so do not deduplicate by rank.
   if (!points.length) { canvas.classList.add("hidden"); empty.classList.remove("hidden"); return; }
-
-  // Allocate a separate vertical row for each group so Chart.js cannot auto-skip labels.
   const chartWrap = canvas.parentElement;
   if (chartWrap) chartWrap.style.height = `${Math.max(245, points.length * 24 + 56)}px`;
-
-  // Keep the scale in percentage points (e.g. 43.1 means 43.1%).
   const maxValue = Math.max(100, ...points.map(x => x.achievement));
   canvas.classList.remove("hidden"); empty.classList.add("hidden");
   makeChart("dealer", {
@@ -451,51 +435,40 @@ function renderDealerChart() {
     data: {
       labels: points.map(x => x.label),
       datasets: [{
-        label: "Achievement (%)",
-        data: points.map(x => x.achievement),
-        // Use alternating blues so short bars remain visually distinguishable.
+        label: "Group ACV (%)", data: points.map(x => x.achievement),
         backgroundColor: points.map(x => x.achievement >= 100 ? "#0b8069" : x.achievement >= 75 ? "#d97706" : "#2f63ff"),
-        borderRadius: 5,
-        barThickness: 14,
-        categoryPercentage: 0.92,
-        barPercentage: 0.92,
-        minBarLength: 5
+        borderRadius: 5, barThickness: 14, categoryPercentage: 0.92,
+        barPercentage: 0.92, minBarLength: 5
       }]
     },
     options: {
-      ...chartOptions(),
-      indexAxis: "y",
+      ...chartOptions(), indexAxis: "y",
       layout: { padding: { left: 8, right: 12, top: 4, bottom: 4 } },
       scales: {
         x: {
-          beginAtZero: true,
-          max: Math.ceil(maxValue / 10) * 10,
+          beginAtZero: true, max: Math.ceil(maxValue / 10) * 10,
           ticks: { color: "#000000", font: { family: "DM Sans", size: 12, weight: "700" }, stepSize: 20, callback: value => `${value}%` },
           grid: { color: "rgba(92,113,148,.22)" }
         },
         y: {
           grid: { display: false },
           afterFit: scale => { scale.width = Math.max(scale.width, 70); },
-          ticks: {
-            autoSkip: false,
-            color: "#000000",
-            font: { size: 11, weight: "600" },
-            callback: function(value) { return this.getLabelForValue(value); }
-          }
+          ticks: { autoSkip: false, color: "#000000", font: { size: 11, weight: "600" },
+            callback: function(value) { return this.getLabelForValue(value); } }
         }
       },
       plugins: {
         ...chartOptions().plugins,
-        tooltip: {
-          callbacks: {
-            label: ctx => `Achievement: ${Number(ctx.raw).toFixed(1)}%`
-          }
-        }
+        tooltip: { callbacks: { label: ctx => {
+          const g = points[ctx.dataIndex];
+          return [`Group ACV: ${Number(g.achievement).toFixed(1)}%`,
+            `Treatment + Replace: ${fmt(g.actual)} units`,
+            `Target: ${fmt(g.target)} units`, `AHASS: ${g.outlets}`];
+        }}}
       }
     }
   });
 }
-
 function chartOptions(){return {responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,labels:{boxWidth:9,usePointStyle:true,pointStyle:"circle",font:{family:"DM Sans",size:12,weight:"700"},color:"#000000"}},tooltip:{backgroundColor:"#19243a",padding:10,displayColors:true}},scales:{x:{grid:{display:false},ticks:{color:"#000000",font:{family:"DM Sans",size:12,weight:"700"},maxRotation:45}},y:{beginAtZero:true,grid:{color:"rgba(92,113,148,.20)"},ticks:{color:"#000000",font:{family:"DM Sans",size:13,weight:"700"}}}}};}
 function makeChart(key,config){
   if(state.charts[key]) state.charts[key].destroy();
