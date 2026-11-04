@@ -1,61 +1,598 @@
-// Performance Digital AHASS Astra Motor Sumsel — October/November 2026
-const SOURCES={oct:'https://docs.google.com/spreadsheets/d/e/2PACX-1vSpfQ6QbaY7qp8UfRQk0-6cJDwU-6aQDuEnJ9KnbgIQfAwdJphWKnaS6imavvwBDw/pub?gid=607615076&single=true&output=csv',nov:'https://docs.google.com/spreadsheets/d/e/2PACX-1vSpfQ6QbaY7qp8UfRQk0-6cJDwU-6aQDuEnJ9KnbgIQfAwdJphWKnaS6imavvwBDw/pub?gid=1286174024&single=true&output=csv'};
-const REFRESH_MS=300000; let allData={oct:[],nov:[]}, currentPeriod='oct', charts={};
-const $=id=>document.getElementById(id), fmt=n=>Math.round(Number(n)||0).toLocaleString('id-ID'), pct=(a,b)=>b>0?a/b*100:null, pctText=n=>n==null?'—':n.toLocaleString('id-ID',{minimumFractionDigits:1,maximumFractionDigits:1})+'%';
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function num(v){
-  if(typeof v==='number')return Number.isFinite(v)?v:0;
-  let s=String(v??'').trim().replace(/[%\s]/g,'');
-  if(!s||s==='-'||s==='—')return 0;
-  const comma=s.lastIndexOf(','),dot=s.lastIndexOf('.');
-  if(comma>=0&&dot>=0){
-    if(comma>dot)s=s.replace(/\./g,'').replace(',','.');
-    else s=s.replace(/,/g,'');
-  }else if(comma>=0){
-    s=/^-?\d{1,3}(,\d{3})+$/.test(s)?s.replace(/,/g,''):s.replace(',','.');
-  }else if(dot>=0){
-    s=/^-?\d{1,3}(\.\d{3})+$/.test(s)?s.replace(/\./g,''):s;
+/* LCR Performance Dashboard
+   Public, read-only Google Sheets CSV sources.
+   Refresh cadence: 15 minutes. Update the URLs below if the published tabs change.
+*/
+const SOURCES = {
+  rankingByPeriod: {
+    "2026-10": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQCaZU7c2yNCR1m6vU9bo1qvfDA83qrZP2sDQP9fVUxzG-GUyFza0JmdbmYda2BqA/pub?gid=1316924880&single=true&output=csv",
+    "2026-11": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQCaZU7c2yNCR1m6vU9bo1qvfDA83qrZP2sDQP9fVUxzG-GUyFza0JmdbmYda2BqA/pub?gid=1177310690&single=true&output=csv"
+  },
+  dealer:  "https://docs.google.com/spreadsheets/d/e/2PACX-1vQCaZU7c2yNCR1m6vU9bo1qvfDA83qrZP2sDQP9fVUxzG-GUyFza0JmdbmYda2BqA/pub?gid=1101508039&single=true&output=csv",
+  history: "https://docs.google.com/spreadsheets/d/e/2PACX-1vQCaZU7c2yNCR1m6vU9bo1qvfDA83qrZP2sDQP9fVUxzG-GUyFza0JmdbmYda2BqA/pub?gid=1717630869&single=true&output=csv"
+};
+const REFRESH_MS = 15 * 60 * 1000;
+const PAGE_SIZE = 25;
+const state = { ranking: [], dealer: [], history: [], filtered: [], page: 1, sort: "rank", direction: "asc", charts: {}, period: "2026-11" };
+const $ = id => document.getElementById(id);
+
+function normalize(s) {
+  return String(s ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+}
+function parseCSV(text, sourceName = "") {
+  const rawRows = [];
+  let row = [], field = "", quoted = false;
+  text = String(text ?? "").replace(/^\uFEFF/, "");
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i], next = text[i + 1];
+    if (c === '"') {
+      if (quoted && next === '"') { field += '"'; i++; }
+      else quoted = !quoted;
+    } else if (c === "," && !quoted) { row.push(field); field = ""; }
+    else if ((c === "\n" || c === "\r") && !quoted) {
+      if (c === "\r" && next === "\n") i++;
+      row.push(field); field = "";
+      if (row.some(v => String(v).trim() !== "")) rawRows.push(row);
+      row = [];
+    } else field += c;
   }
-  const n=Number(s);return Number.isFinite(n)?n:0
+  if (field.length || row.length) { row.push(field); if (row.some(v => String(v).trim() !== "")) rawRows.push(row); }
+  if (!rawRows.length) return [];
+
+  // The published tabs contain title/metadata rows before their real column headers.
+  // Select the row with the strongest set of recognizable column names.
+  const scoreRow = (r) => {
+    const cells = r.map(v => normalize(v));
+    let score = 0;
+    const has = (pattern) => cells.some(c => pattern.test(c));
+    if (has(/^rank$|^ranking$/)) score += 4;
+    if (has(/group dealer|grup dealer/)) score += 4;
+    if (has(/no ahass/)) score += 3;
+    if (has(/nama ahass/)) score += 3;
+    if (has(/^target$|target bulan/)) score += 2;
+    if (has(/treatment.*replace|actual|total ue pkb/)) score += 2;
+    if (has(/kota|kabupaten/)) score += 1;
+    if (has(/jan 26|jan 2026|target jan agu|acv total/)) score += 2;
+    return score;
+  };
+  let headerIndex = 0, bestScore = -1;
+  rawRows.forEach((r, i) => {
+    const score = scoreRow(r);
+    if (score > bestScore) { bestScore = score; headerIndex = i; }
+  });
+  const headers = rawRows[headerIndex].map((h,i) => String(h || `column_${i+1}`).trim());
+  const result = rawRows.slice(headerIndex + 1).map(r =>
+    Object.fromEntries(headers.map((h,i) => [h, (r[i] ?? "").trim()]))
+  );
+  // Drop obvious repeated header lines and weekday-only helper rows.
+  return result.filter(r => {
+    const vals = Object.values(r).map(v => normalize(v));
+    if (!vals.some(Boolean)) return false;
+    if (vals.some(v => v === "rank" || v === "ranking" || v === "grup dealer" || v === "group dealer")) return false;
+    if (sourceName === "ranking" && vals.some(v => /^(senin|selasa|rabu|kamis|jumat|sabtu|minggu)$/.test(v))) return false;
+    return true;
+  });
 }
-function normalizeCsv(csv){const rows=Papa.parse(csv,{skipEmptyLines:false}).data;const out=[];for(let i=5;i<rows.length;i++){const r=rows[i]||[];const code=String(r[5]??'').trim(),name=String(r[7]??'').trim();if(!code||!name||name==='#NAME?')continue;out.push({se:String(r[0]||'').trim(),group:String(r[1]||'').trim()||'—',city:String(r[3]||'').trim()||'—',status:String(r[4]||'').trim().toUpperCase()||'—',code:code.padStart(5,'0'),name,kpbTarget:num(r[9]),kpbDigital:num(r[12]),bookingTarget:num(r[14]),bookingActual:num(r[15]),astraTarget:num(r[17]),astraActual:num(r[18])});}return out}
-async function loadPeriod(period){const response=await fetch(SOURCES[period]+'&_='+Date.now(),{cache:'no-store'});if(!response.ok)throw Error('HTTP '+response.status);const text=await response.text();if(!text||text.trim().startsWith('<'))throw Error('CSV tidak dapat dibaca. Pastikan tab dipublikasikan sebagai CSV.');const rows=normalizeCsv(text);if(!rows.length)throw Error('Tidak ada baris AHASS yang terbaca.');allData[period]=rows;return rows}
-function currentRows(){return allData[currentPeriod]||[]}
-function selectedRows(){let rows=currentRows();const city=$('cityFilter').value,group=$('groupFilter').value,status=$('statusFilter').value,ahass=$('ahassFilter').value;return rows.filter(r=>(city==='all'||r.city===city)&&(group==='all'||r.group===group)&&(status==='all'||r.status===status)&&(ahass==='all'||r.code+'||'+r.name===ahass))}
-function aggregate(rows){return rows.reduce((a,r)=>{a.kpbTarget+=r.kpbTarget;a.kpbDigital+=r.kpbDigital;a.bookingTarget+=r.bookingTarget;a.bookingActual+=r.bookingActual;a.astraTarget+=r.astraTarget;a.astraActual+=r.astraActual;return a},{kpbTarget:0,kpbDigital:0,bookingTarget:0,bookingActual:0,astraTarget:0,astraActual:0})}
-function rateClass(v,key){if(v==null)return '';const low=key==='kpb'?80:70,mid=key==='kpb'?90:90;return v<low?'bad':v<mid?'warn':'good'}
-function metric(v,actual,target,key){return `<span class="metric ${rateClass(v,key)}">${pctText(v)} (${fmt(actual)} / ${fmt(target)})</span>`}
-function priority(r){const a=[{key:'kpb',label:'KPB Digital',v:pct(r.kpbDigital,r.kpbTarget),actual:r.kpbDigital,target:r.kpbTarget,gap:Math.max(0,r.kpbTarget-r.kpbDigital),tip:'Perkuat edukasi dan konsistensi penggunaan proses KPB Digital.'},{key:'booking',label:'Booking Service',v:pct(r.bookingActual,r.bookingTarget),actual:r.bookingActual,target:r.bookingTarget,gap:Math.max(0,r.bookingTarget-r.bookingActual),tip:'Tingkatkan follow-up pelanggan dan disiplin pencatatan booking harian.'},{key:'astra',label:'AstraPay',v:pct(r.astraActual,r.astraTarget),actual:r.astraActual,target:r.astraTarget,gap:Math.max(0,r.astraTarget-r.astraActual),tip:'Perkuat penawaran AstraPay di area service reception dan pantau transaksi harian.'}].filter(x=>x.target>0);a.sort((x,y)=>x.v-y.v);const w=a[0]||{key:'booking',label:'Booking Service',v:null,actual:0,target:0,gap:0,tip:'Validasi target dan aktual.'};const level=w.v<50?'high':w.v<80?'medium':'low';return {...w,level}}
-function optionsFor(id,values,selected){const el=$(id),old=selected??el.value;el.innerHTML='<option value="all">'+({city:'Semua Kota',group:'Semua Grup',status:'Semua Status',ahass:'Semua AHASS'}[id.replace('Filter','')])+'</option>'+values.map(v=>`<option value="${esc(v.value)}">${esc(v.label)}</option>`).join('');el.value=[...el.options].some(o=>o.value===old)?old:'all'}
-function refreshFilters(changed){const base=currentRows();const vals={city:new Set(),group:new Set(),status:new Set(),ahass:new Map()};const chosen={city:$('cityFilter').value,group:$('groupFilter').value,status:$('statusFilter').value,ahass:$('ahassFilter').value};for(const r of base){if(chosen.city!=='all'&&r.city!==chosen.city&&changed!=='city')continue;if(chosen.group!=='all'&&r.group!==chosen.group&&changed!=='group')continue;if(chosen.status!=='all'&&r.status!==chosen.status&&changed!=='status')continue;if(chosen.ahass!=='all'&&r.code+'||'+r.name!==chosen.ahass&&changed!=='ahass')continue;vals.city.add(r.city);vals.group.add(r.group);vals.status.add(r.status);vals.ahass.set(r.code+'||'+r.name,r)}
-optionsFor('cityFilter',[...vals.city].sort().map(v=>({value:v,label:v})),chosen.city);optionsFor('groupFilter',[...vals.group].sort().map(v=>({value:v,label:v})),chosen.group);optionsFor('statusFilter',[...vals.status].sort().map(v=>({value:v,label:v})),chosen.status);optionsFor('ahassFilter',[...vals.ahass.values()].sort((a,b)=>a.name.localeCompare(b.name)).map(r=>({value:r.code+'||'+r.name,label:r.code+' - '+r.name})),chosen.ahass)}
-function chart(id,type,data,options={}){if(charts[id])charts[id].destroy();const el=$(id);if(!el)return;charts[id]=new Chart(el,{type,data,options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{usePointStyle:true,boxWidth:8,font:{family:'DM Sans',size:10}}},tooltip:{callbacks:{label:(ctx)=>`${ctx.dataset.label||ctx.label}: ${Number(ctx.raw).toLocaleString('id-ID',{maximumFractionDigits:1})}`}}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,grid:{color:'#edf0f4'}}},...options}})}
-function draw(){const rows=selectedRows(),t=aggregate(rows),k=pct(t.kpbDigital,t.kpbTarget),b=pct(t.bookingActual,t.bookingTarget),a=pct(t.astraActual,t.astraTarget);$('kpiKpb').textContent=pctText(k);$('kpiBooking').textContent=pctText(b);$('kpiAstra').textContent=pctText(a);$('kpiOutlets').textContent=fmt(rows.length);$('kpiKpbDetail').textContent=`${fmt(t.kpbDigital)} / ${fmt(t.kpbTarget)} KPB`; $('kpiBookingDetail').textContent=`${fmt(t.bookingActual)} / ${fmt(t.bookingTarget)} booking`;$('kpiAstraDetail').textContent=`${fmt(t.astraActual)} / ${fmt(t.astraTarget)} transaksi`;
-[['barKpb',k],['barBooking',b],['barAstra',a]].forEach(([id,v])=>$(id).style.width=Math.max(0,Math.min(100,v||0))+'%');$('periodTag').textContent=currentPeriod==='oct'?'OKTOBER 2026':'NOVEMBER 2026';
-const metrics=[['KPB Digital',k],['Booking Service',b],['AstraPay',a]];chart('achievementChart','bar',{labels:metrics.map(x=>x[0]),datasets:[{data:metrics.map(x=>x[1]||0),backgroundColor:['#d9273e','#2188bd','#e3ad25'],borderRadius:5,barThickness:24}]},{indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx)=>`${Number(ctx.raw).toLocaleString('id-ID',{minimumFractionDigits:1,maximumFractionDigits:1})}%`}}},scales:{x:{min:0,max:100,ticks:{callback:v=>v+'%'}}}});
-// Channel chart: calculate each status achievement from summed actual / summed target.
-// Do not use pre-calculated row percentages or raw actual totals as chart values.
-const statuses=[...new Set(rows.map(r=>r.status))].sort();
-// Always aggregate status charts from AHASS detail rows using the same parsed values
-// as KPI totals, ranking, and filters.
-const statusAggregates=statuses.map(status=>({status,...aggregate(rows.filter(r=>r.status===status))}));
-const statusChartDatasets=[
-  {label:'KPB Digital',key:'kpb',actual:'kpbDigital',target:'kpbTarget',backgroundColor:'#d9273e'},
-  {label:'Booking',key:'booking',actual:'bookingActual',target:'bookingTarget',backgroundColor:'#2188bd'},
-  {label:'AstraPay',key:'astra',actual:'astraActual',target:'astraTarget',backgroundColor:'#e3ad25'}
-].map(ds=>({...ds,data:statusAggregates.map(s=>pct(s[ds.actual],s[ds.target])??0)}));
-const maxStatusRate=Math.max(100,...statusChartDatasets.flatMap(ds=>ds.data));
-const statusAxisMax=Math.ceil(maxStatusRate/10)*10;
-chart('channelChart','bar',{labels:statuses,datasets:statusChartDatasets},{scales:{y:{min:0,max:statusAxisMax,ticks:{callback:v=>v+'%'}},x:{grid:{display:false}}},plugins:{tooltip:{callbacks:{label:(ctx)=>{const s=statusAggregates[ctx.dataIndex],ds=statusChartDatasets[ctx.datasetIndex],actual=s[ds.actual],target=s[ds.target],rate=pct(actual,target);return `${ds.label}: ${pctText(rate)} (${fmt(actual)} / ${fmt(target)})`;}}}}});
-const priorities=rows.map(r=>({r,p:priority(r)})).sort((x,y)=>(x.p.v??999)-(y.p.v??999));$('overviewRows').innerHTML=priorities.slice(0,7).map(({r,p})=>`<tr><td>${esc(r.code)} - ${esc(r.name)}</td><td>${esc(r.status)}</td><td>${metric(pct(r.kpbDigital,r.kpbTarget),r.kpbDigital,r.kpbTarget,'kpb')}</td><td>${metric(pct(r.bookingActual,r.bookingTarget),r.bookingActual,r.bookingTarget,'booking')}</td><td>${metric(pct(r.astraActual,r.astraTarget),r.astraActual,r.astraTarget,'astra')}</td><td><span class="priority ${p.level}">${p.level.toUpperCase()}</span></td></tr>`).join('')||'<tr><td colspan="6" class="empty">Tidak ada data.</td></tr>';
-const labels=rows.map(r=>r.code);chart('kpbChart','bar',{labels,datasets:[{label:'Target KPB',data:rows.map(r=>r.kpbTarget),backgroundColor:'#f2c6cb'},{label:'KPB Digital',data:rows.map(r=>r.kpbDigital),backgroundColor:'#d9273e'}]},{scales:{x:{ticks:{maxRotation:60,minRotation:45}}}});chart('bookingChart','bar',{labels,datasets:[{label:'Target Booking',data:rows.map(r=>r.bookingTarget),backgroundColor:'#c9e2f0'},{label:'Actual Booking',data:rows.map(r=>r.bookingActual),backgroundColor:'#2188bd'}]},{scales:{x:{ticks:{maxRotation:60,minRotation:45}}}});chart('astraChart','bar',{labels,datasets:[{label:'Target AstraPay',data:rows.map(r=>r.astraTarget),backgroundColor:'#f5e4b5'},{label:'Actual AstraPay',data:rows.map(r=>r.astraActual),backgroundColor:'#e3ad25'}]},{scales:{x:{ticks:{maxRotation:60,minRotation:45}}}});
-$('channelRows').innerHTML=[['KPB Digital',t.kpbDigital,t.kpbTarget,k],['Booking Service',t.bookingActual,t.bookingTarget,b],['AstraPay',t.astraActual,t.astraTarget,a]].map(x=>`<tr><td>${x[0]}</td><td>${fmt(x[1])}</td><td>${fmt(x[2])}</td><td>${metric(x[3],x[1],x[2],x[0]==='KPB Digital'?'kpb':'booking')}</td></tr>`).join('');
-const q=$('searchAhass').value.toLowerCase(),metricKey=$('rankingMetric').value;const sorted=rows.filter(r=>(r.name+' '+r.city+' '+r.code).toLowerCase().includes(q)).sort((x,y)=>(pct(y[metricKey==='kpb'?'kpbDigital':metricKey==='booking'?'bookingActual':'astraActual'],y[metricKey==='kpb'?'kpbTarget':metricKey==='booking'?'bookingTarget':'astraTarget'])??-1)-(pct(x[metricKey==='kpb'?'kpbDigital':metricKey==='booking'?'bookingActual':'astraActual'],x[metricKey==='kpb'?'kpbTarget':metricKey==='booking'?'bookingTarget':'astraTarget'])??-1));$('rankingRows').innerHTML=sorted.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.city)}</td><td>${esc(r.group)}</td><td>${esc(r.status)}</td><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${metric(pct(r.kpbDigital,r.kpbTarget),r.kpbDigital,r.kpbTarget,'kpb')}</td><td>${metric(pct(r.bookingActual,r.bookingTarget),r.bookingActual,r.bookingTarget,'booking')}</td><td>${metric(pct(r.astraActual,r.astraTarget),r.astraActual,r.astraTarget,'astra')}</td></tr>`).join('')||'<tr><td colspan="9" class="empty">Tidak ada data.</td></tr>';$('rankingCount').textContent=`Menampilkan ${sorted.length} dari ${rows.length} AHASS`;
-const filter=$('priorityFilter').value,act=priorities.filter(x=>filter==='all'||x.p.level===filter);const counts=['high','medium','low'].map(l=>[l,priorities.filter(x=>x.p.level===l).length]);$('prioritySummary').innerHTML=counts.map(([l,n])=>`<div class="priority-box"><span>Prioritas ${l==='high'?'Tinggi':l==='medium'?'Menengah':'Rendah'}</span><b>${n}</b></div>`).join('');$('actionRows').innerHTML=act.map(({r,p})=>`<tr><td><span class="priority ${p.level}">${p.level.toUpperCase()}</span></td><td>${esc(r.code)} - ${esc(r.name)}<br><small>${esc(r.city)} • ${esc(r.status)}</small></td><td>${p.label}</td><td>${pctText(p.v)}</td><td>${fmt(p.actual)} / ${fmt(p.target)}</td><td>${p.tip}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">Tidak ada data.</td></tr>';
+function headerList(rows) { return rows.length ? Object.keys(rows[0]) : []; }
+function findKey(rows, patterns, exclude=[]) {
+  const keys = headerList(rows);
+  for (const p of patterns) {
+    const found = keys.find(k => p.test(normalize(k)) && !exclude.some(x => x.test(normalize(k))));
+    if (found) return found;
+  }
+  return null;
 }
-function toast(s){$('toast').textContent=s;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),3000)}
-async function refresh(){try{$('dataState').textContent='Memperbarui data...';await loadPeriod(currentPeriod);refreshFilters();draw();$('updatedAt').textContent=new Date().toLocaleString('id-ID');$('dataState').textContent=`Live • ${currentRows().length} AHASS`; }catch(e){$('dataState').textContent='Gagal memuat data';toast('Gagal memuat data: '+e.message);console.error(e)}}
-function setPage(page){document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id==='page-'+page));document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('active',x.dataset.page===page));$('crumb').textContent=({overview:'Ringkasan',channel:'Analisis Channel',ranking:'Peringkat AHASS',actions:'Prioritas Tindak Lanjut'})[page]}
-document.querySelectorAll('.nav').forEach(b=>b.addEventListener('click',()=>setPage(b.dataset.page)));document.querySelectorAll('[data-goto]').forEach(b=>b.addEventListener('click',()=>setPage(b.dataset.goto)));
-['cityFilter','groupFilter','statusFilter','ahassFilter'].forEach(id=>$(id).addEventListener('change',()=>{refreshFilters(id.replace('Filter',''));draw()}));$('resetFilters').addEventListener('click',()=>{['cityFilter','groupFilter','statusFilter','ahassFilter'].forEach(id=>$(id).value='all');refreshFilters();draw()});$('periodSelect').addEventListener('change',async e=>{currentPeriod=e.target.value;await refresh()});$('refreshBtn').addEventListener('click',refresh);['searchAhass','rankingMetric','priorityFilter'].forEach(id=>$(id).addEventListener('input',draw));$('exportJpeg').addEventListener('click',async()=>{try{const rows=selectedRows();if(!rows.length)throw Error('Tidak ada AHASS untuk diekspor.');const wrap=document.createElement('div');wrap.style.cssText='position:fixed;left:-10000px;top:0;width:2200px;background:#fff;padding:38px;font-family:Arial;color:#1b2a3d';const t=aggregate(rows);wrap.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:end;margin-bottom:22px"><div><div style="font-size:15px;color:#d9273e;font-weight:bold;letter-spacing:2px">ASTRA MOTOR SUMATERA SELATAN</div><h1 style="font-size:32px;margin:10px 0">RESUME PERFORMANCE DIGITAL AHASS</h1><div style="font-size:16px;color:#64758b">${currentPeriod==='oct'?'Oktober':'November'} 2026 • ${rows.length} AHASS</div></div><div style="font-size:13px;color:#64758b">Export: ${new Date().toLocaleString('id-ID')}</div></div><div style="display:flex;gap:18px;margin-bottom:25px">${[['KPB DIGITAL',pct(t.kpbDigital,t.kpbTarget),t.kpbDigital,t.kpbTarget],['BOOKING SERVICE',pct(t.bookingActual,t.bookingTarget),t.bookingActual,t.bookingTarget],['ASTRAPAY',pct(t.astraActual,t.astraTarget),t.astraActual,t.astraTarget]].map(x=>`<div style="flex:1;border:1px solid #e3e8ee;border-radius:10px;padding:18px"><div style="font-size:13px;color:#718096;font-weight:bold">${x[0]}</div><b style="display:block;font-size:30px;margin:8px 0">${pctText(x[1])}</b><span style="font-size:13px;color:#718096">${fmt(x[2])} / ${fmt(x[3])}</span></div>`).join('')}</div><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#102b4e;color:white">${['NO','KOTA','GRUP','STATUS','NO. AHASS','NAMA AHASS','KPB DIGITAL','BOOKING','ASTRAPAY','PRIORITAS'].map(x=>`<th style="padding:12px;text-align:left">${x}</th>`).join('')}</tr></thead><tbody>${rows.slice().sort((x,y)=>x.name.localeCompare(y.name)).map((r,i)=>{const p=priority(r);return `<tr>${[i+1,r.city,r.group,r.status,r.code,r.name,`${pctText(pct(r.kpbDigital,r.kpbTarget))} (${fmt(r.kpbDigital)}/${fmt(r.kpbTarget)})`,`${pctText(pct(r.bookingActual,r.bookingTarget))} (${fmt(r.bookingActual)}/${fmt(r.bookingTarget)})`,`${pctText(pct(r.astraActual,r.astraTarget))} (${fmt(r.astraActual)}/${fmt(r.astraTarget)})`,p.level.toUpperCase()].map(v=>`<td style="padding:11px;border-bottom:1px solid #e8edf2">${esc(v)}</td>`).join('')}</tr>`}).join('')}</tbody></table>`;document.body.appendChild(wrap);const canvas=await html2canvas(wrap,{scale:2,backgroundColor:'#fff',useCORS:true});const a=document.createElement('a');a.download=`Resume-Performance-Digital-AHASS-${currentPeriod==='oct'?'Oktober':'November'}-2026.jpg`;a.href=canvas.toDataURL('image/jpeg',.95);a.click();wrap.remove();toast('JPEG berhasil dibuat.');}catch(e){toast('Ekspor gagal: '+e.message)}});
-refresh();setInterval(refresh,REFRESH_MS);
+function num(value) {
+  if (typeof value === "number") return value;
+  let s = String(value ?? "").trim();
+  if (!s || s === "-" || s.toLowerCase() === "n/a") return 0;
+  s = s.replace(/\s/g,"").replace(/rp\.?/ig,"").replace(/%/g,"");
+  if (/^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g,"").replace(",",".");
+  else if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g,"");
+  else s = s.replace(",",".");
+  const n = Number(s.replace(/[^\d.-]/g,""));
+  return Number.isFinite(n) ? n : 0;
+}
+function firstNumber(row, patterns, exclude=[]) {
+  const keys = Object.keys(row || {});
+  for (const p of patterns) {
+    const k = keys.find(key => p.test(normalize(key)) && !exclude.some(x => x.test(normalize(key))));
+    if (k && String(row[k]).trim() !== "") return num(row[k]);
+  }
+  return 0;
+}
+function mapRanking(rows) {
+  const keys = rows.length ? Object.keys(rows[0]) : [];
+  const key = (patterns, exclude=[]) => keys.find(k => patterns.some(p => p.test(normalize(k))) && !exclude.some(p => p.test(normalize(k))));
+  const targetKey = key([/^target$/]);
+  const actualKey = key([/^treatment replace$/, /treatment.*replace/, /^actual$/]);
+  const achKey = key([/^pencapaian treatment replace$/, /pencapaian.*treatment.*replace/]);
+  const rankKey = key([/^rank$/, /^ranking$/]);
+  const dealerKey = key([/^group dealer$/, /^grup dealer$/]);
+  const codeKey = key([/^no ahass$/, /kode ahass/]);
+  const nameKey = key([/^nama ahass$/, /nama.*lcr/]);
+  const cityKey = key([/^kota kabupaten$/, /kota/, /kabupaten/]);
+  // Published CSV headers can contain line breaks/extra spaces because the
+  // source sheet uses wrapped, multi-line labels. Match normalized labels first.
+  // Explicit aliases for the source sheet's wrapped/multi-line column labels.
+  const enteredKey = key([/total ue esaf masuk ke ahass/, /total ue esaf masuk/, /ue esaf masuk ke ahass/, /ue esaf masuk/]);
+  const clearanceRateKey = key([/% kelolosan lcr dari ue/, /kelolosan lcr dari ue.*persen/, /persen kelolosan lcr/, /percent.*kelolosan lcr/]);
+  const clearanceKey = key([/^kelolosan lcr dari ue$/, /kelolosan lcr dari ue/], [/% kelolosan/, /persen/, /percent/, /rate/]);
+  return rows.map((r, i) => {
+    const target = targetKey ? num(r[targetKey]) : 0;
+    const actual = actualKey ? num(r[actualKey]) : 0;
+    let achievement = achKey ? num(r[achKey]) : (target ? actual / target * 100 : 0);
+    if (achKey && String(r[achKey]).includes("%")) achievement = num(r[achKey]);
+    else if (achKey && achievement > 0 && achievement <= 1) achievement *= 100;
+    const entered = enteredKey ? num(r[enteredKey]) : 0;
+    let clearance = clearanceKey ? num(r[clearanceKey]) : 0;
+    let clearanceRate = clearanceRateKey ? num(r[clearanceRateKey]) : 0;
+    // Values in the source sheet are a count and a percentage. Prefer those
+    // published values; calculate the rate only when the percentage is absent.
+    if (clearanceRateKey && String(r[clearanceRateKey]).includes("%")) clearanceRate = num(r[clearanceRateKey]);
+    else if (clearanceRate > 0 && clearanceRate <= 1) clearanceRate *= 100;
+    if (!clearanceRate && entered > 0 && clearance >= 0) clearanceRate = clearance / entered * 100;
+    // If a source exports a rate but omits the count, reconstruct the count.
+    if (!clearance && entered > 0 && clearanceRate > 0) clearance = Math.round(entered * clearanceRate / 100);
+    const rawRank = rankKey ? num(r[rankKey]) : i + 1;
+    return {
+      raw:r, rank:rawRank || i+1,
+      dealer:dealerKey ? r[dealerKey] : "—",
+      code:codeKey ? r[codeKey] : "—",
+      name:nameKey ? r[nameKey] : (codeKey ? r[codeKey] : `Outlet ${i+1}`),
+      city:cityKey ? r[cityKey] : "—",
+      target, actual, achievement, gap:Math.max(0,target-actual), entered, clearance, clearanceRate
+    };
+  }).filter(x => x.name && !/^nama ahass$/i.test(x.name) && (x.target > 0 || x.actual > 0));
+}
+async function fetchCSV(url, sourceName) {
+  const separator = url.includes("?") ? "&" : "?";
+  const res = await fetch(`${url}${separator}_ts=${Date.now()}`, { cache:"no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  if (!text.trim() || text.trimStart().startsWith("<!DOCTYPE") || text.trimStart().startsWith("<html")) throw new Error("Endpoint did not return CSV. Check that the sheet is published as CSV.");
+  return parseCSV(text, sourceName);
+}
+async function refreshData() {
+  const btn = $("refresh-btn"); btn.disabled = true; btn.textContent = "↻ Refreshing…";
+  setConnection("loading", "Refreshing data…");
+  const rankingUrl = SOURCES.rankingByPeriod[state.period] || SOURCES.rankingByPeriod["2026-11"];
+  const results = await Promise.allSettled([fetchCSV(rankingUrl, 'ranking'), fetchCSV(SOURCES.dealer, 'dealer'), fetchCSV(SOURCES.history, 'history')]);
+  const names = ["ranking","dealer","history"], errors=[];
+  results.forEach((result,i) => {
+    if (result.status === "fulfilled") state[names[i]] = result.value;
+    else errors.push(`${names[i]}: ${result.reason?.message || "fetch failed"}`);
+  });
+  const anyData = state.ranking.length || state.dealer.length || state.history.length;
+  if (anyData) {
+    state.outlets = mapRanking(state.ranking);
+    populateDealerFilter();
+    applyFilters();
+    renderKPIs();
+    renderCharts();
+    renderAhassHistory();
+    $("last-updated").textContent = `Updated ${new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})}`;
+    const periodSelect = $("period-select");
+    const selectedLabel = periodSelect?.selectedOptions?.[0]?.textContent || "Selected period";
+    $("period-label").textContent = selectedLabel;
+    const overviewSubtitle = document.querySelector("#overview .section-heading p");
+    if (overviewSubtitle) overviewSubtitle.textContent = `Current position from ${selectedLabel} ranking`;
+    setConnection(errors.length ? "warning" : "ok", errors.length ? "Partially connected" : "All sources connected");
+    if (errors.length) showAlert("Some sources could not refresh. The dashboard is showing the last successfully loaded data for those sources. " + errors.join(" | "));
+    else hideAlert();
+  } else {
+    setConnection("error","Connection failed");
+    showAlert("Could not load any Google Sheets source. Confirm each tab is published as CSV and that the URLs are accessible publicly. Details: " + errors.join(" | "));
+    $("ranking-body").innerHTML = `<tr><td colspan="9" class="table-message">Could not load data. Check the published CSV URLs and try Refresh data.</td></tr>`;
+  }
+  btn.disabled = false; btn.textContent = "↻ Refresh data";
+}
+function setConnection(status,label) {
+  $("connection-label").textContent = label;
+  const dot = $("connection-dot");
+  dot.style.background = status==="ok" ? "#139b8b" : status==="error" ? "#d34b58" : status==="warning" ? "#d58b2b" : "#e1a13b";
+  dot.style.boxShadow = status==="ok" ? "0 0 0 4px #e8f8f4" : status==="error" ? "0 0 0 4px #fff0f1" : "0 0 0 4px #fff4df";
+}
+function showAlert(msg) { $("alert").textContent=msg; $("alert").classList.remove("hidden"); }
+function hideAlert() { $("alert").classList.add("hidden"); }
+function detectPeriod() {
+  const all = [...state.ranking,...state.dealer,...state.history];
+  const key = findKey(all,[/periode/,/period/,/bulan/,/month/]);
+  if (key) { const v=all.map(r=>r[key]).find(Boolean); if(v) return v; }
+  return "";
+}
+function populateDealerFilter() {
+  const select=$("dealer-filter"), current=select.value;
+  const vals=[...new Set((state.outlets||[]).map(r=>r.dealer).filter(v=>v && v!=="—"))].sort((a,b)=>a.localeCompare(b));
+  select.innerHTML='<option value="">All dealer groups</option>'+vals.map(v=>`<option value="${escapeHTML(v)}">${escapeHTML(v)}</option>`).join("");
+  if(vals.includes(current)) select.value=current;
+}
+function applyFilters() {
+  const q=normalize($("search-input").value), dealer=$("dealer-filter").value, status=$("status-filter").value;
+  state.filtered=(state.outlets||[]).filter(r=>{
+    const text=normalize([r.dealer,r.code,r.name,r.city].join(" "));
+    return (!q||text.includes(q))&&(!dealer||r.dealer===dealer)&&(!status||(status==="below"?r.achievement<100:r.achievement>=100));
+  });
+  state.filtered.sort((a,b)=>{
+    let x=a[state.sort], y=b[state.sort];
+    if(typeof x==="string") {x=x.toLowerCase();y=String(y).toLowerCase();}
+    const v=x<y?-1:x>y?1:0; return state.direction==="asc"?v:-v;
+  });
+  state.page=1; renderTable();
+}
+function renderKPIs() {
+  const rows=state.outlets||[];
+  const totalTarget=rows.reduce((s,r)=>s+r.target,0), totalActual=rows.reduce((s,r)=>s+r.actual,0);
+  const achievement=totalTarget?totalActual/totalTarget*100:0, gap=Math.max(0,totalTarget-totalActual);
+  $("kpi-target").textContent=fmt(totalTarget);
+  $("kpi-actual").textContent=fmt(totalActual);
+  $("kpi-achievement").textContent=totalTarget?pct(achievement):"—";
+  $("kpi-progress").style.width=`${Math.min(100,Math.max(0,achievement))}%`;
+  $("kpi-progress").style.background = achievement >= 100 ? "#0b8069" : achievement >= 75 ? "#d97706" : "#c21f3a";
+  $("kpi-gap").textContent=fmt(gap);
+  $("kpi-gap-note").textContent=gap ? `${pct(totalTarget?totalActual/totalTarget*100:0)} achieved` : "Target reached";
+  $("kpi-below").textContent=fmt(rows.filter(r=>r.achievement<100).length);
+}
+function renderTable() {
+  const rows=state.filtered||[], pages=Math.max(1,Math.ceil(rows.length/PAGE_SIZE));
+  state.page=Math.min(state.page,pages);
+  const start=(state.page-1)*PAGE_SIZE, visible=rows.slice(start,start+PAGE_SIZE);
+  $("row-count").textContent=`${rows.length.toLocaleString("id-ID")} outlets`;
+  $("table-summary").textContent=rows.length?`Showing ${start+1}–${Math.min(start+PAGE_SIZE,rows.length)} of ${rows.length}`:"No matching outlets";
+  $("page-label").textContent=`Page ${state.page} of ${pages}`;
+  $("prev-page").disabled=state.page<=1; $("next-page").disabled=state.page>=pages;
+  $("ranking-body").innerHTML=visible.length?visible.map((r,i)=>{
+    const achClass=r.achievement>=100?"good":r.achievement>=75?"warn":"bad";
+    return `<tr><td><span class="rank-number">${escapeHTML(r.rank)}</span></td><td>${escapeHTML(r.dealer)}</td><td>${escapeHTML(r.code)}</td><td><strong>${escapeHTML(r.name)}</strong></td><td>${escapeHTML(r.city)}</td><td class="numeric">${fmt(r.target)}</td><td class="numeric">${fmt(r.actual)}</td><td class="numeric"><div class="achievement-cell"><span class="status-pill ${achClass}">${pct(r.achievement)}</span><span class="achievement-track"><span style="width:${Math.min(100,Math.max(0,r.achievement))}%;background:${r.achievement>=100?'var(--teal)':r.achievement>=75?'var(--orange)':'var(--red)'}"></span></span></div></td><td class="numeric">${fmt(r.gap)}</td></tr>`;
+  }).join(""):`<tr><td colspan="9" class="table-message">No rows match the current filters, or required columns were not detected.</td></tr>`;
+}
+function renderCharts() {
+  if (typeof Chart==="undefined") { showAlert("Chart library did not load. Check internet access or the Chart.js CDN."); return; }
+  renderHistoryChart(); renderDealerChart();
+}
+function getHistoryConfig() {
+  const rows = state.history || [];
+  const keys = Object.keys(rows[0] || {});
+  const monthPattern = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[ -]?(26|2026)$/i;
+  const monthNames = {jan:"Jan",feb:"Feb",mar:"Mar",apr:"Apr",may:"May",jun:"Jun",jul:"Jul",aug:"Aug",sep:"Sep",oct:"Oct",nov:"Nov",dec:"Dec"};
+  const monthKeys = keys.filter(k => monthPattern.test(normalize(k).replace(/\s+/g," ")));
+  const orderedMonths = ["Jan-26","Feb-26","Mar-26","Apr-26","May-26","Jun-26","Jul-26","Aug-26","Sep-26","Oct-26","Nov-26","Dec-26"];
+  const months = monthKeys.map(key => {
+    const m = normalize(key).replace(/\s+/g," ").match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[ -]?(26|2026)$/i);
+    return { key, label: m ? `${monthNames[m[1].toLowerCase()]}-26` : key };
+  }).sort((a,b) => orderedMonths.indexOf(a.label) - orderedMonths.indexOf(b.label));
+  const codeKey = keys.find(k => /^(no ahass|kode ahass|kode outlet|ahass code)$/.test(normalize(k)));
+  const nameKey = keys.find(k => /^(nama ahass|nama outlet|ahass|nama dealer)$/.test(normalize(k)))
+    || keys.find(k => /nama.*ahass|ahass.*nama/.test(normalize(k)));
+  const dealerKey = keys.find(k => /^(grup dealer|group dealer|dealer)$/.test(normalize(k)));
+  const identityKey = codeKey || nameKey;
+  return { rows, keys, months, codeKey, nameKey, dealerKey, identityKey };
+}
+function historyRowLabel(row, cfg, i) {
+  const code = cfg.codeKey ? String(row[cfg.codeKey] || "").trim() : "";
+  const name = cfg.nameKey ? String(row[cfg.nameKey] || "").trim() : "";
+  const dealer = cfg.dealerKey ? String(row[cfg.dealerKey] || "").trim() : "";
+  const primary = name || code || (cfg.identityKey ? String(row[cfg.identityKey] || "").trim() : "");
+  if (!primary) return "";
+  return `${primary}${code && name && code !== name ? ` (${code})` : ""}${dealer ? ` — ${dealer}` : ""}`;
+}
+function renderHistoryChart() {
+  const cfg = getHistoryConfig();
+  const canvas = $("history-chart"), empty = $("history-empty");
+  if (!cfg.rows.length || !cfg.months.length) {
+    canvas.classList.add("hidden"); empty.classList.remove("hidden"); return;
+  }
+  const labels = cfg.months.map(m => m.label);
+  const values = cfg.months.map(m => cfg.rows.reduce((sum,r) => sum + num(r[m.key]), 0));
+  canvas.classList.remove("hidden"); empty.classList.add("hidden");
+  makeChart("history", {type:"line", data:{labels, datasets:[{
+    label:"Total LCR treatment", data:values, borderColor:"#1748e8",
+    backgroundColor:"rgba(23,72,232,.18)", fill:true, tension:.3,
+    pointRadius:4, pointHoverRadius:6, pointBackgroundColor:"#ffffff",
+    pointBorderColor:"#1748e8", pointBorderWidth:2, borderWidth:3
+  }]}, options:chartOptions()});
+}
+function renderAhassHistory() {
+  const cfg = getHistoryConfig();
+  const select = $("ahass-history-select");
+  const groupSelect = $("history-group-filter");
+  const canvas = $("ahass-history-chart");
+  const empty = $("ahass-history-empty");
+  const summary = $("ahass-history-summary");
+  if (!select || !groupSelect || !canvas || !empty || !summary) return;
+
+  const valid = cfg.rows.map((row, i) => ({
+    row, i, label: historyRowLabel(row, cfg, i),
+    group: cfg.dealerKey ? String(row[cfg.dealerKey] || "").trim() : ""
+  })).filter(x => x.label && cfg.months.some(m => String(x.row[m.key] ?? "").trim() !== ""));
+
+  if (!cfg.months.length || !valid.length) {
+    groupSelect.innerHTML = '<option value="">All dealer groups</option>';
+    select.innerHTML = '<option value="">AHASS history unavailable</option>';
+    canvas.classList.add("hidden");
+    empty.classList.remove("hidden");
+    summary.textContent = "No AHASS/monthly history fields were detected.";
+    return;
+  }
+
+  const previousGroup = groupSelect.value;
+  const groups = [...new Set(valid.map(x => x.group).filter(Boolean))].sort((a,b) => a.localeCompare(b));
+  groupSelect.innerHTML = '<option value="">All dealer groups</option>' +
+    groups.map(g => `<option value="${escapeHTML(g)}">${escapeHTML(g)}</option>`).join("");
+  if (groups.includes(previousGroup)) groupSelect.value = previousGroup;
+
+  const filtered = valid.filter(x => !groupSelect.value || x.group === groupSelect.value);
+  const previousAhass = select.value;
+  const groupChosen = Boolean(groupSelect.value);
+  select.innerHTML =
+    (groupChosen ? '<option value="__group_total__">Combined total — selected group</option>' : '') +
+    filtered.map((x, i) => `<option value="${i}">${escapeHTML(x.label)}</option>`).join("");
+
+  // When a group is selected, default to the combined monthly total for all AHASS in that group.
+  const desired = groupChosen ? "__group_total__" : previousAhass;
+  if ([...select.options].some(o => o.value === desired)) select.value = desired;
+  else select.value = groupChosen ? "__group_total__" : "0";
+
+  const isGroupTotal = groupChosen && select.value === "__group_total__";
+  const chosen = isGroupTotal ? null : filtered[Number(select.value)];
+  if (!isGroupTotal && !chosen) {
+    canvas.classList.add("hidden");
+    empty.classList.remove("hidden");
+    summary.textContent = "No AHASS available for this dealer group.";
+    return;
+  }
+
+  const labels = cfg.months.map(m => m.label);
+  const values = cfg.months.map(m => {
+    const selectedRows = isGroupTotal ? filtered : [chosen];
+    const cellValues = selectedRows.map(x => {
+      const raw = String(x.row[m.key] ?? "").trim();
+      return raw === "" || /^[-–—]$/.test(raw) ? null : num(raw);
+    }).filter(v => v !== null && Number.isFinite(v));
+    return cellValues.length ? cellValues.reduce((sum, v) => sum + v, 0) : null;
+  });
+  const chartLabel = isGroupTotal
+    ? `Combined LCR treatment units — ${groupSelect.options[groupSelect.selectedIndex].text}`
+    : `LCR treatment units — ${chosen.label}`;
+
+  const latestIndex = values.reduce((last, v, i) => v !== null && Number.isFinite(v) ? i : last, -1);
+  const previousIndex = latestIndex > 0 ? values.slice(0, latestIndex).reduce((last, v, i) => v !== null && Number.isFinite(v) ? i : last, -1) : -1;
+  if (latestIndex >= 0) {
+    const latest = values[latestIndex];
+    const previous = previousIndex >= 0 ? values[previousIndex] : null;
+    const change = previous !== null ? latest - previous : null;
+    summary.textContent = `${labels[latestIndex]}: ${fmt(latest)} units${change !== null ? ` · ${change > 0 ? "+" : ""}${fmt(change)} vs ${labels[previousIndex]}` : ""}${isGroupTotal ? ` · ${filtered.length} AHASS combined` : ""}`;
+  } else summary.textContent = "No monthly values available for this selection.";
+
+  if (typeof Chart === "undefined") return;
+  canvas.classList.remove("hidden");
+  empty.classList.add("hidden");
+  makeChart("ahassHistory", {
+    type:"line",
+    data:{labels, datasets:[{
+      label:chartLabel, data:values,
+      borderColor:"#1748e8", backgroundColor:"rgba(23,72,232,.12)",
+      fill:true, tension:.25, spanGaps:false, pointRadius:4,
+      pointHoverRadius:6, pointBackgroundColor:"#ffffff",
+      pointBorderColor:"#1748e8", pointBorderWidth:2, borderWidth:3
+    }]},
+    options:chartOptions(),
+    plugins:[{
+      id:"monthlyValueLabels",
+      afterDatasetsDraw(chart) {
+        const {ctx} = chart;
+        chart.data.datasets.forEach((dataset, datasetIndex) => {
+          const meta = chart.getDatasetMeta(datasetIndex);
+          meta.data.forEach((point, index) => {
+            const value = dataset.data[index];
+            if (value === null || value === undefined || !Number.isFinite(Number(value))) return;
+            const position = point.tooltipPosition();
+            ctx.save();
+            ctx.font = "700 12px DM Sans, Arial, sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "bottom";
+            ctx.fillStyle = "#17233b";
+            ctx.shadowColor = "rgba(255,255,255,.9)";
+            ctx.shadowBlur = 3;
+            ctx.fillText(Number(value).toLocaleString("id-ID", {maximumFractionDigits:1}), position.x, position.y - 9);
+            ctx.restore();
+          });
+        });
+      }
+    }]
+  });
+}
+
+function renderDealerChart() {
+  const rows = state.dealer || [];
+  const canvas = $("dealer-chart"), empty = $("dealer-empty");
+  if (!rows.length) { canvas.classList.add("hidden"); empty.classList.remove("hidden"); return; }
+
+  const keys = Object.keys(rows[0] || {});
+  const findExact = (name) => keys.find(k => normalize(k) === normalize(name));
+  const groupKey = findExact("Grup Dealer") || findExact("Group Dealer");
+  const targetKey = findExact("Target");
+  const actualKey = findExact("Actual");
+  const achievementKey = findExact("Pencapaian");
+  const labelKey = groupKey || keys.find(k => /grup dealer|group dealer/i.test(k));
+
+  const points = rows.map((r, i) => {
+    const target = targetKey ? num(r[targetKey]) : 0;
+    const actual = actualKey ? num(r[actualKey]) : 0;
+    let achievement = achievementKey ? num(r[achievementKey]) : NaN;
+    const raw = achievementKey ? String(r[achievementKey] ?? "").trim() : "";
+    if (!Number.isFinite(achievement) || raw === "" || /#REF!|#DIV\/0!/i.test(raw)) {
+      achievement = target > 0 ? actual / target * 100 : 0;
+    } else if (raw.includes("%")) {
+      // num() strips the percent symbol, so 43.1% remains 43.1.
+    } else if (achievement > 0 && achievement <= 1) {
+      // Google Sheets may export percentage-formatted cells as fractions.
+      achievement *= 100;
+    }
+    return {
+      label: labelKey ? String(r[labelKey] || "").trim() : `Group ${i + 1}`,
+      achievement: Number.isFinite(achievement) ? achievement : 0,
+      target, actual
+    };
+  }).filter(x => x.label && !/^grup dealer$/i.test(x.label));
+
+  // Keep every group from the published MTD table, including TDM.
+  // Some exported sheets contain repeated rank values, so do not deduplicate by rank.
+  if (!points.length) { canvas.classList.add("hidden"); empty.classList.remove("hidden"); return; }
+
+  // Allocate a separate vertical row for each group so Chart.js cannot auto-skip labels.
+  const chartWrap = canvas.parentElement;
+  if (chartWrap) chartWrap.style.height = `${Math.max(245, points.length * 24 + 56)}px`;
+
+  // Keep the scale in percentage points (e.g. 43.1 means 43.1%).
+  const maxValue = Math.max(100, ...points.map(x => x.achievement));
+  canvas.classList.remove("hidden"); empty.classList.add("hidden");
+  makeChart("dealer", {
+    type: "bar",
+    data: {
+      labels: points.map(x => x.label),
+      datasets: [{
+        label: "Achievement (%)",
+        data: points.map(x => x.achievement),
+        // Use alternating blues so short bars remain visually distinguishable.
+        backgroundColor: points.map(x => x.achievement >= 100 ? "#0b8069" : x.achievement >= 75 ? "#d97706" : "#2f63ff"),
+        borderRadius: 5,
+        barThickness: 14,
+        categoryPercentage: 0.92,
+        barPercentage: 0.92,
+        minBarLength: 5
+      }]
+    },
+    options: {
+      ...chartOptions(),
+      indexAxis: "y",
+      layout: { padding: { left: 8, right: 12, top: 4, bottom: 4 } },
+      scales: {
+        x: {
+          beginAtZero: true,
+          max: Math.ceil(maxValue / 10) * 10,
+          ticks: { color: "#000000", font: { family: "DM Sans", size: 12, weight: "700" }, stepSize: 20, callback: value => `${value}%` },
+          grid: { color: "rgba(92,113,148,.22)" }
+        },
+        y: {
+          grid: { display: false },
+          afterFit: scale => { scale.width = Math.max(scale.width, 70); },
+          ticks: {
+            autoSkip: false,
+            color: "#000000",
+            font: { size: 11, weight: "600" },
+            callback: function(value) { return this.getLabelForValue(value); }
+          }
+        }
+      },
+      plugins: {
+        ...chartOptions().plugins,
+        tooltip: {
+          callbacks: {
+            label: ctx => `Achievement: ${Number(ctx.raw).toFixed(1)}%`
+          }
+        }
+      }
+    }
+  });
+}
+
+function chartOptions(){return {responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,labels:{boxWidth:9,usePointStyle:true,pointStyle:"circle",font:{family:"DM Sans",size:12,weight:"700"},color:"#000000"}},tooltip:{backgroundColor:"#19243a",padding:10,displayColors:true}},scales:{x:{grid:{display:false},ticks:{color:"#000000",font:{family:"DM Sans",size:12,weight:"700"},maxRotation:45}},y:{beginAtZero:true,grid:{color:"rgba(92,113,148,.20)"},ticks:{color:"#000000",font:{family:"DM Sans",size:13,weight:"700"}}}}};}
+function makeChart(key,config){
+  if(state.charts[key]) state.charts[key].destroy();
+  const canvasId = key==="history" ? "history-chart" : key==="ahassHistory" ? "ahass-history-chart" : "dealer-chart";
+  state.charts[key]=new Chart($(canvasId),config);
+}
+function fmt(n){return Number(n||0).toLocaleString("id-ID",{maximumFractionDigits:1});}
+function pct(n){return `${Number(n||0).toLocaleString("id-ID",{maximumFractionDigits:1,minimumFractionDigits:1})}%`;}
+function escapeHTML(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+async function exportJPG(){
+  const button = $("export-btn");
+  const panel = document.querySelector("#ranking .table-panel");
+  if (!panel) return;
+  if (typeof html2canvas !== "function") {
+    showAlert("JPG export library did not load. Check internet access and try again.");
+    return;
+  }
+  const oldText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Preparing JPG…";
+  try {
+    const canvas = await html2canvas(panel, {
+      backgroundColor: "#ffffff",
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      onclone: clonedDoc => {
+        const clonedPanel = clonedDoc.querySelector("#ranking .table-panel");
+        const scroll = clonedPanel?.querySelector(".table-scroll");
+        if (scroll) {
+          scroll.style.overflow = "visible";
+          scroll.style.maxWidth = "none";
+          scroll.style.width = `${scroll.scrollWidth}px`;
+        }
+        const table = clonedPanel?.querySelector("table");
+        if (table) table.style.width = "max-content";
+      }
+    });
+    const link = document.createElement("a");
+    link.download = `lcr-ahass-ranking-${new Date().toISOString().slice(0,10)}.jpg`;
+    link.href = canvas.toDataURL("image/jpeg", 0.95);
+    link.click();
+  } catch (error) {
+    console.error("JPG export failed:", error);
+    showAlert("Could not export the ranking as JPG. Please refresh the dashboard and try again.");
+  } finally {
+    button.disabled = false;
+    button.textContent = oldText;
+  }
+}
+async function exportTrendJPG(){
+  const button = $("export-history-jpg-btn");
+  const panel = document.querySelector("#ahass-history .panel");
+  if (!panel) return;
+  if (typeof html2canvas !== "function") {
+    showAlert("JPG export library did not load. Check internet access and try again.");
+    return;
+  }
+  const oldText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Preparing JPG…";
+  try {
+    const canvas = await html2canvas(panel, {
+      backgroundColor:"#ffffff", scale:3, useCORS:true, logging:false
+    });
+    const link = document.createElement("a");
+    const selected = $("ahass-history-select")?.selectedOptions?.[0]?.textContent || "ahass";
+    const safeName = selected.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+    link.download = `lcr-history-trend-${safeName}-${new Date().toISOString().slice(0,10)}.jpg`;
+    link.href = canvas.toDataURL("image/jpeg", 0.96);
+    link.click();
+  } catch (error) {
+    console.error("Trend JPG export failed:", error);
+    showAlert("Could not export the historical trend as JPG. Please refresh and try again.");
+  } finally {
+    button.disabled = false;
+    button.textContent = oldText;
+  }
+}
+
+$("period-select").addEventListener("change", (event) => {
+  state.period = event.target.value;
+  refreshData();
+});
+$("refresh-btn").addEventListener("click",refreshData);
+$("ahass-history-select").addEventListener("change",renderAhassHistory);
+$("history-group-filter").addEventListener("change",renderAhassHistory);
+$("export-history-jpg-btn").addEventListener("click",exportTrendJPG);
+$("search-input").addEventListener("input",applyFilters);
+$("dealer-filter").addEventListener("change",applyFilters);
+$("status-filter").addEventListener("change",applyFilters);
+$("prev-page").addEventListener("click",()=>{if(state.page>1){state.page--;renderTable();}});
+$("next-page").addEventListener("click",()=>{state.page++;renderTable();});
+$("export-btn").addEventListener("click",exportJPG);
+document.querySelectorAll("th[data-sort]").forEach(th=>th.addEventListener("click",()=>{
+  const key=th.dataset.sort; if(state.sort===key)state.direction=state.direction==="asc"?"desc":"asc";else{state.sort=key;state.direction=key==="rank"?"asc":"desc";}
+  applyFilters();
+}));
+refreshData();
+setInterval(refreshData,REFRESH_MS);
